@@ -1,0 +1,7 @@
+/venv
+/logs
+/models
+/wandb
+
+*.vscode
+*__pycache__
