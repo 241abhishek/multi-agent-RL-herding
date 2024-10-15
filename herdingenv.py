@@ -50,7 +50,6 @@ class HerdingSimEnv(gym.Env):
         self.observation_space = spaces.Box(low=-np.inf, high=np.inf, 
                                             shape=(num_sheep + num_sheepdogs, 3), dtype=np.float32)
 
-
         # Convert to pygame units (pixels)
         self.scale_factor = 50  # 1 meter = 50 pixels, adjust as needed
         self.arena_length_px = self.arena_length * self.scale_factor
@@ -66,6 +65,9 @@ class HerdingSimEnv(gym.Env):
         return robots
 
     def step(self, action):
+        # check if the action is valid
+        # assert self.action_space.contains(action), "Invalid action! Outside action space."
+        assert len(action) == self.num_sheepdogs * 2, "Invalid action! Incorrect number of actions."
         # Update sheep-dogs using RL agent actions
         for i in range(self.num_sheepdogs):
             left_wheel_velocity = action[i * 2]
@@ -85,7 +87,7 @@ class HerdingSimEnv(gym.Env):
 
         return observations, reward, done, info
 
-    def render(self, mode="human"):
+    def render(self, mode="human", fps=1):
         # Initialize pygame if it hasn't been already
         if not hasattr(self, 'screen'):
             pygame.init()
@@ -139,7 +141,7 @@ class HerdingSimEnv(gym.Env):
         # Update the display for "human" mode
         if mode == "human":
             pygame.display.flip()
-            self.clock.tick(1)  # Set frame rate to 10 FPS (1/10th of a second per frame)
+            self.clock.tick(fps)  # Set frame rate 
 
         # Save frames if needed for video output
         frame = pygame.surfarray.array3d(self.screen)
