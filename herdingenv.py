@@ -59,10 +59,18 @@ class HerdingSimEnv(gym.Env):
         self.frames = []
 
         # simulation parameters
-        # these are hardcoded parameters that define the behavior of the simulation
+        # these are hardcoded parameters that define the behavior of the sheep
         self.max_sheep_wheel_vel = 5.0 # max wheel velocity of the sheep 
+        self.n = 5 # number of nearest neighbours to consider for attraction
+        self.r_s = 2.0 # sheep-dog detection distance
+        self.r_a = 0.4 # sheep-sheep interaction distance 
+        self.p_a = 5.0 # relative strength of repulsion from other agents
+        self.c = 0.2 # relative strength of attraction to the n nearest neighbours
+        self.p_s = 1.0 # relative strength of repulsion from the sheep-dogs
+
+        # arena parameters
+        self.point_dist = 0.1 # distance between the point that is controlled using the vector headings on the sheep and the center of the sheep
         self.arena_threshold = 0.5 # distance from the boundary at which the sheep will start moving away from the boundary
-        self.point_dist = 0.1 # distance between the point that is controlled using the vectpr headings on the sheep and the center of the sheep
         self.arena_rep = 0.5 # repulsion force from the boundary
 
 
@@ -80,6 +88,13 @@ class HerdingSimEnv(gym.Env):
             left_wheel_velocity = action[i * 2]
             right_wheel_velocity = action[i * 2 + 1]
             self.robots[i].update_position(left_wheel_velocity, right_wheel_velocity)
+
+            # clip the sheep-dog position if updated position is outside the arena
+            x, y, _ = self.robots[i].get_state()
+            x = np.clip(x, 0.0, self.arena_length)
+            y = np.clip(y, 0.0, self.arena_width)
+            self.robots[i].x = x
+            self.robots[i].y = y
 
         # Update sheep positions using predefined behavior 
         self.compute_sheep_actions()
@@ -189,7 +204,8 @@ class HerdingSimEnv(gym.Env):
             vec_desired = np.array([0.0, 0.0])
 
             # first check if the sheep is close to the boundary
-            if x < 0.0 or x > self.arena_length or y < 0.0 or y > self.arena_width:
+            if x < 0.0 + self.arena_threshold or x > self.arena_length - self.arena_threshold or \
+            y < 0.0 + self.arena_threshold or y > self.arena_width - self.arena_threshold:
                 # calculate the vector perpendicular to the arena boundary
                 vec_boundary = np.array([0.0, 0.0])
                 if x < 0.0 + self.arena_threshold:
@@ -215,6 +231,65 @@ class HerdingSimEnv(gym.Env):
                 # update the sheep position based on the wheel velocities
                 self.robots[i].update_position(wheel_velocities[0], wheel_velocities[1])
                 continue
+
+            # sort the sheep based on the distance from the current sheep
+            closest_neighbors = []
+            for j in range(self.num_sheepdogs, len(self.robots)):
+                if i == j:
+                    continue
+                x_j, y_j, _ = self.robots[j].get_state()
+                dist = np.linalg.norm(np.array([x - x_j, y - y_j]))
+                closest_neighbors.append((dist, j))
+            closest_neighbors.sort()
+
+            # calculate the LCM (local center of mass) of the sheep withing the interaction distance
+            sheep_within_r = 0
+            for j in range(len(closest_neighbors)):
+                if closest_neighbors[j][0] < self.r_a:
+                    sheep_within_r += 1
+            if sheep_within_r > 0:
+                lcm = np.array([0.0, 0.0]) 
+                for j in range(sheep_within_r):
+                    x_j, y_j, _ = self.robots[closest_neighbors[j][1]].get_state()
+                    lcm = np.add(lcm, np.array([x_j, y_j]))
+                lcm = lcm / sheep_within_r
+
+                # calculate the vector pointing away from the LCM
+                vec_repulsion = np.subtract(np.array([x, y]), lcm)
+                vec_repulsion = vec_repulsion / np.linalg.norm(vec_repulsion) # normalize the vector
+                # add the repulsion vector to the desired heading vector
+                vec_desired = np.add(vec_desired, self.p_a*vec_repulsion)
+                vec_desired = vec_desired / np.linalg.norm(vec_desired) # normalize the vector
+
+            # calculate the vector pointing away from the sheep-dogs
+            sheepdog_within_r = 0
+            for j in range(self.num_sheepdogs):
+                x_j, y_j, _ = self.robots[j].get_state()
+                dist = np.linalg.norm(np.array([x - x_j, y - y_j]))
+                if dist < self.r_s:
+                    sheepdog_within_r += 1
+                    vec_repulsion = np.subtract(np.array([x, y]), np.array([x_j, y_j]))
+                    vec_repulsion = vec_repulsion / np.linalg.norm(vec_repulsion)
+                    vec_desired = np.add(vec_desired, self.p_s*vec_repulsion)
+                    vec_desired = vec_desired / np.linalg.norm(vec_desired) # normalize the vector
+
+            # calculate the vector pointing towards the n nearest neighbors
+            if sheepdog_within_r > 0:
+                for j in range(min(self.n, len(closest_neighbors))):
+                    x_j, y_j, _ = self.robots[closest_neighbors[j][1]].get_state()
+                    vec_attraction = np.subtract(np.array([x_j, y_j]), np.array([x, y]))
+                    vec_attraction = vec_attraction / np.linalg.norm(vec_attraction)
+                    vec_desired = np.add(vec_desired, self.c*vec_attraction)
+                    vec_desired = vec_desired / np.linalg.norm(vec_desired)
+
+            # use the diff drive motion model to calculate the wheel velocities
+            if vec_desired[0] == 0.0 and vec_desired[1] == 0.0:
+                wheel_velocities = np.array([0.0, 0.0])
+            else:
+                wheel_velocities = self.diff_drive_motion_model(vec_desired, [x, y, theta])
+
+            # update the sheep position based on the wheel velocities
+            self.robots[i].update_position(wheel_velocities[0], wheel_velocities[1])
 
     def get_observations(self):
         # Return positions and orientations of all robots
