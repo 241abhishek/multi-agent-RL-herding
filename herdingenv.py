@@ -58,6 +58,14 @@ class HerdingSimEnv(gym.Env):
         # save the frames at each step for future rendering
         self.frames = []
 
+        # simulation parameters
+        # these are hardcoded parameters that define the behavior of the simulation
+        self.max_sheep_wheel_vel = 5.0 # max wheel velocity of the sheep 
+        self.arena_threshold = 0.5 # distance from the boundary at which the sheep will start moving away from the boundary
+        self.point_dist = 0.1 # distance between the point that is controlled using the vectpr headings on the sheep and the center of the sheep
+        self.arena_rep = 0.5 # repulsion force from the boundary
+
+
     def init_robots(self, initial_positions):
         robots = []
         for pos in initial_positions:
@@ -66,7 +74,6 @@ class HerdingSimEnv(gym.Env):
 
     def step(self, action):
         # check if the action is valid
-        # assert self.action_space.contains(action), "Invalid action! Outside action space."
         assert len(action) == self.num_sheepdogs * 2, "Invalid action! Incorrect number of actions."
         # Update sheep-dogs using RL agent actions
         for i in range(self.num_sheepdogs):
@@ -165,8 +172,49 @@ class HerdingSimEnv(gym.Env):
         return self.get_observations()
 
     def compute_sheep_actions(self):
-        # update sheep positions based on predefined behavior
-        pass
+        """
+        Update the positions of the sheep based on predefined behavior.
+        """
+
+        # loop over all the sheep and update their positions
+        for i in range(self.num_sheepdogs, len(self.robots)):
+            # get the current sheep position
+            x, y, theta = self.robots[i].get_state()
+
+            # calculate current heading
+            vec_curr = np.array([np.cos(theta), np.sin(theta)])
+            vec_curr = vec_curr / np.linalg.norm(vec_curr) # normalize the vector
+
+            # initialize the desired heading vector
+            vec_desired = np.array([0.0, 0.0])
+
+            # first check if the sheep is close to the boundary
+            if x < 0.0 or x > self.arena_length or y < 0.0 or y > self.arena_width:
+                # calculate the vector perpendicular to the arena boundary
+                vec_boundary = np.array([0.0, 0.0])
+                if x < 0.0 + self.arena_threshold:
+                    vec_boundary[0] = 1.0
+                elif x > self.arena_length - self.arena_threshold:
+                    vec_boundary[0] = -1.0
+                if y < 0.0 + self.arena_threshold:
+                    vec_boundary[1] = 1.0
+                elif y > self.arena_width - self.arena_threshold:
+                    vec_boundary[1] = -1.0
+
+                # cancel out the component of the current heading vector that is perpendicular to the boundary
+                # vec_desired = np.subtract(vec_curr, np.dot(vec_curr, vec_boundary) * vec_boundary)
+                # vec_desired = vec_desired / np.linalg.norm(vec_desired) # normalize the vector
+
+                # add the boundary vector to the desired heading vector
+                vec_desired = np.add(vec_desired, self.arena_rep*vec_boundary)
+                vec_desired = vec_desired / np.linalg.norm(vec_desired) # normalize the vector
+
+                # use the diff drive motion model to calculate the wheel velocities
+                wheel_velocities = self.diff_drive_motion_model(vec_desired, [x, y, theta])
+
+                # update the sheep position based on the wheel velocities
+                self.robots[i].update_position(wheel_velocities[0], wheel_velocities[1])
+                continue
 
     def get_observations(self):
         # Return positions and orientations of all robots
@@ -182,3 +230,43 @@ class HerdingSimEnv(gym.Env):
     def check_done(self):
         # Check if the episode is over
         pass
+
+    def diff_drive_motion_model(self, vec_desired, pose) -> np.array:
+        """
+        Compute the wheel velocities for the sheep based on the desired and current heading vectors.
+
+        Args:
+            vec_desired (np.array): Desired heading vector
+            pose (np.array): Current position and orientation of the sheep
+
+        Returns:
+            np.array: Wheel velocities for the sheep
+        """
+
+        # calculate the angle for the desired heading vector
+        vec_desired = vec_desired / np.linalg.norm(vec_desired) # normalize the vector
+        des_angle = np.arctan2(vec_desired[1], vec_desired[0])
+
+        # calculate the angle difference
+        angle_diff = des_angle - pose[2]
+
+        # normalize the angle difference
+        angle_diff = (angle_diff + np.pi) % (2 * np.pi) - np.pi
+
+        # calculate the body frame forward velocity 
+        v_b = np.cos(angle_diff)
+
+        # calculate the body frame angular velocity
+        w_b = np.sin(angle_diff) / self.point_dist
+
+        # calculate the wheel velocities
+        left_wheel_velocity = (2 * v_b - w_b * self.distance_between_wheels) / (2 * self.wheel_radius)
+        right_wheel_velocity = (2 * v_b + w_b * self.distance_between_wheels) / (2 * self.wheel_radius)
+
+        wheel_velocities = np.array([left_wheel_velocity, right_wheel_velocity])
+
+        # normalize and scale the wheel velocities
+        max_wheel_velocity = max(abs(left_wheel_velocity), abs(right_wheel_velocity))
+        wheel_velocities = wheel_velocities / max_wheel_velocity * self.max_sheep_wheel_vel
+
+        return wheel_velocities
