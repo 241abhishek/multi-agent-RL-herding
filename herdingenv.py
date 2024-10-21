@@ -84,6 +84,8 @@ class HerdingSimEnv(gym.Env):
             assert 0 + self.arena_threshold <= self.goal_point[0] <= self.arena_length - self.arena_threshold, f"Invalid goal point! x-coordinate out of bounds. Coordinate should be within {self.arena_threshold} and {self.arena_length - self.arena_threshold}."
             assert 0 + self.arena_threshold <= self.goal_point[1] <= self.arena_width - self.arena_threshold, f"Invalid goal point! y-coordinate out of bounds. Coordinate should be within {self.arena_threshold} and {self.arena_width - self.arena_threshold}."
 
+        self.episode_reward = 0.0
+
     def init_robots(self, initial_positions):
         robots = []
         for pos in initial_positions:
@@ -114,10 +116,11 @@ class HerdingSimEnv(gym.Env):
 
         # Compute reward, done, and info
         reward = self.compute_reward()
+        self.episode_reward += reward
         done = self.check_done()
         info = {}
 
-        return observations, reward, done, info
+        return observations, self.episode_reward, done, info
 
     def render(self, mode="human", fps=1):
         # Initialize pygame if it hasn't been already
@@ -322,8 +325,74 @@ class HerdingSimEnv(gym.Env):
         return np.array(obs)
 
     def compute_reward(self):
-        # Define reward function
-        pass
+        """
+        Compute the reward for the current state of the environment.
+
+        Reward is calculated on the following basis:
+        - Reward based on the distance of the sheep from the goal point
+        - Negative reward for each time step to encourage faster convergence
+        - Negative reward for allowing the sheep to spread to far from each other (not clustered)
+        - Positive reward for the sheep-dogs being on the other side of the sheep herd and the goal point
+        - Large positive reward for the sheep herd reaching the goal point
+
+        Returns:
+            float: Reward value
+        """
+
+        reward = 0.0
+
+        # calculate the distance of each sheep from the goal point
+        for i in range(self.num_sheepdogs, len(self.robots)):
+            x, y, _ = self.robots[i].get_state()
+            dist = np.linalg.norm(np.array([x, y]) - np.array(self.goal_point))
+            reward += -dist
+
+        # add negative reward for each time step
+        reward += -1.0
+
+        # calculate the Global Center of Mass (GCM) of the sheep herd
+        sheep_gcm = np.array([0.0, 0.0])
+        for i in range(self.num_sheepdogs, len(self.robots)):
+            x, y, _ = self.robots[i].get_state()
+            sheep_gcm = np.add(sheep_gcm, np.array([x, y]))
+        sheep_gcm = sheep_gcm / self.num_sheep
+
+        # calculate the distance of each sheep from the GCM
+        for i in range(self.num_sheepdogs, len(self.robots)):
+            x, y, _ = self.robots[i].get_state()
+            dist = np.linalg.norm(np.array([x, y]) - sheep_gcm)
+            reward += -dist + 1.0 # 1.0 is added as a buffer to specify the min distance at which no penalty in incurred 
+
+        # determine if the sheep-dogs are on the other side of the sheep herd and the goal point
+        sheepdog_gcm = np.array([0.0, 0.0])
+        for i in range(self.num_sheepdogs):
+            x, y, _ = self.robots[i].get_state()
+            sheepdog_gcm = np.add(sheepdog_gcm, np.array([x, y]))
+        sheepdog_gcm = sheepdog_gcm / self.num_sheepdogs
+
+        # calculate the equation of the line perpendicular to the line connecting the sheep GCM and the goal point and passing through the sheep GCM
+        m = (sheep_gcm[1] - self.goal_point[1]) / (sheep_gcm[0] - self.goal_point[0])
+        m_perp = -1.0 / m
+        c = sheep_gcm[1] - m_perp * sheep_gcm[0]
+
+        # determine the side of the sheep-dogs with respect to the line
+        sheep_dog_side = np.sign(sheepdog_gcm[1] - m_perp * sheepdog_gcm[0] - c)
+
+        # determine the side of the goal point with respect to the line
+        goal_side = np.sign(self.goal_point[1] - m_perp * self.goal_point[0] - c)
+
+        # check if the sheep-dogs are on the other side of the sheep herd and the goal point
+        if sheep_dog_side != goal_side:
+            reward += 25.0
+
+        # calculate the distance of the sheep GCM from the goal point
+        sheep_dist = np.linalg.norm(sheep_gcm - np.array(self.goal_point))
+
+        # check if the sheep herd has reached the goal point
+        if sheep_dist < self.goal_tolreance:
+            reward += 1000.0
+
+        return reward
 
     def check_done(self):
         # check if the sheep herd has reached the goal point
