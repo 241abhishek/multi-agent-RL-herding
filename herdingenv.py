@@ -59,6 +59,10 @@ class HerdingSimEnv(gym.Env):
         # save the frames at each step for future rendering
         self.frames = []
 
+        # set max number of steps for each episode
+        self.curr_iter = 0
+        self.MAX_STEPS = 2500
+
         # simulation parameters
         # these are hardcoded parameters that define the behavior of the sheep
         self.max_sheep_wheel_vel = 5.0 # max wheel velocity of the sheep 
@@ -83,8 +87,6 @@ class HerdingSimEnv(gym.Env):
             assert len(self.goal_point) == 2, "Invalid goal point! Please provide a valid goal point."
             assert 0 + self.arena_threshold <= self.goal_point[0] <= self.arena_length - self.arena_threshold, f"Invalid goal point! x-coordinate out of bounds. Coordinate should be within {self.arena_threshold} and {self.arena_length - self.arena_threshold}."
             assert 0 + self.arena_threshold <= self.goal_point[1] <= self.arena_width - self.arena_threshold, f"Invalid goal point! y-coordinate out of bounds. Coordinate should be within {self.arena_threshold} and {self.arena_width - self.arena_threshold}."
-
-        self.episode_reward = 0.0
 
     def init_robots(self, initial_positions):
         robots = []
@@ -115,12 +117,10 @@ class HerdingSimEnv(gym.Env):
         observations = self.get_observations()
 
         # Compute reward, done, and info
-        reward = self.compute_reward()
-        self.episode_reward += reward
-        done = self.check_done()
+        reward, done = self.compute_reward()
         info = {}
 
-        return observations, self.episode_reward, done, info
+        return observations, reward, done, info
 
     def render(self, mode="human", fps=1):
         # Initialize pygame if it hasn't been already
@@ -205,6 +205,9 @@ class HerdingSimEnv(gym.Env):
 
         # clear the frames
         self.frames = []
+
+        # reset the step counter
+        self.curr_iter = 0
 
         # Return the initial observation
         return self.get_observations()
@@ -361,7 +364,7 @@ class HerdingSimEnv(gym.Env):
         for i in range(self.num_sheepdogs, len(self.robots)):
             x, y, _ = self.robots[i].get_state()
             dist = np.linalg.norm(np.array([x, y]) - sheep_gcm)
-            reward += -dist + 1.0 # 1.0 is added as a buffer to specify the min distance at which no penalty in incurred 
+            reward += -dist + 1.5 # 1.5 is added as a buffer to specify the min distance at which no penalty in incurred 
 
         # determine if the sheep-dogs are on the other side of the sheep herd and the goal point
         sheepdog_gcm = np.array([0.0, 0.0])
@@ -385,24 +388,27 @@ class HerdingSimEnv(gym.Env):
         if sheep_dog_side != goal_side:
             reward += 25.0
 
-        # calculate the distance of the sheep GCM from the goal point
-        sheep_dist = np.linalg.norm(sheep_gcm - np.array(self.goal_point))
-
         # check if the sheep herd has reached the goal point
-        if sheep_dist < self.goal_tolreance:
-            reward += 1000.0
+        done = self.check_done()
+        if done:
+            reward += 2500.0
 
-        return reward
+        return reward, done
 
     def check_done(self):
+        # count the number of steps taken in the episode
+        self.curr_iter += 1
+        print("Current iteration: ", self.curr_iter)
+        if self.curr_iter >= self.MAX_STEPS:
+            return True
         # check if the sheep herd has reached the goal point
+        done = True
         for i in range(self.num_sheepdogs, len(self.robots)):
             x, y, _ = self.robots[i].get_state()
             dist = np.linalg.norm(np.array([x, y]) - np.array(self.goal_point))
             if dist > self.goal_tolreance:
-                return False
-
-        return True
+                done = False
+        return done
 
     def diff_drive_motion_model(self, vec_desired, pose) -> np.array:
         """
