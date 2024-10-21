@@ -122,7 +122,7 @@ class HerdingSimEnv(gym.Env):
 
         return observations, reward, done, info
 
-    def render(self, mode="human", fps=1):
+    def render(self, mode, fps=1):
         # Initialize pygame if it hasn't been already
         if not hasattr(self, 'screen'):
             pygame.init()
@@ -211,6 +211,12 @@ class HerdingSimEnv(gym.Env):
 
         # Return the initial observation
         return self.get_observations()
+
+    def get_video_frames(self):
+        frames = np.array(self.frames)
+        # add a time dimension to the video
+        frames = np.expand_dims(frames, axis=0)
+        return frames
 
     def compute_sheep_actions(self):
         """
