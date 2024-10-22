@@ -47,9 +47,9 @@ class HerdingSimEnv(gym.Env):
         # Action space is wheel velocities for sheep-dogs
         self.action_space = spaces.Box(low=-max_wheel_velocity, high=max_wheel_velocity, 
                                        shape=(num_sheepdogs * 2,), dtype=np.float32)
-        # Observation space is positions and orientations of all robots
+        # Observation space is positions and orientations of all robots plus the goal point
         self.observation_space = spaces.Box(low=-np.inf, high=np.inf, 
-                                            shape=(num_sheep + num_sheepdogs, 3), dtype=np.float32)
+                                            shape=(num_sheep + num_sheepdogs + 1, 3), dtype=np.float32)
 
         # Convert to pygame units (pixels)
         self.scale_factor = 50  # 1 meter = 50 pixels, adjust as needed
@@ -122,13 +122,19 @@ class HerdingSimEnv(gym.Env):
 
         return observations, reward, done, info
 
-    def render(self, mode, fps=1):
+    def render(self, mode=None, fps=1):
         # Initialize pygame if it hasn't been already
-        if not hasattr(self, 'screen'):
-            pygame.init()
-            self.screen = pygame.display.set_mode((self.arena_length_px, self.arena_width_px))
-            pygame.display.set_caption("Herding Simulation")
-            self.clock = pygame.time.Clock()
+        if mode == "human":
+            if not hasattr(self, 'screen') or not isinstance(self.screen, pygame.display.get_surface().__class__):
+                pygame.init()
+                self.screen = pygame.display.set_mode((self.arena_length_px, self.arena_width_px))
+                pygame.display.set_caption("Herding Simulation")
+                self.clock = pygame.time.Clock()
+        else:
+            if not hasattr(self, 'screen') or not isinstance(self.screen, pygame.Surface):
+                pygame.init()
+                self.screen = pygame.Surface((self.arena_length_px, self.arena_width_px))
+                self.clock = pygame.time.Clock()  # Clock can still be used for controlling frame rate
 
         # Clear the previous frame
         self.screen.fill((0, 0, 0))  # Fill screen with black
@@ -185,7 +191,12 @@ class HerdingSimEnv(gym.Env):
 
         # Save frames if needed for video output
         frame = pygame.surfarray.array3d(self.screen)
-        self.frames.append(np.rot90(frame))  # Convert Pygame surface to numpy array
+        frame = np.rot90(frame)  # Convert Pygame surface to numpy array
+        # flip the frame
+        frame = np.flip(frame, axis=0)
+        # reorder the axes to match the expected format (channel, height, width)
+        frame = np.moveaxis(frame, -1, 0)
+        self.frames.append(frame)  # Convert Pygame surface to numpy array
         
     def reset(self):
         # Reset the environment
@@ -404,7 +415,6 @@ class HerdingSimEnv(gym.Env):
     def check_done(self):
         # count the number of steps taken in the episode
         self.curr_iter += 1
-        print("Current iteration: ", self.curr_iter)
         if self.curr_iter >= self.MAX_STEPS:
             return True
         # check if the sheep herd has reached the goal point
