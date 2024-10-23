@@ -88,7 +88,8 @@ class HerdingSimEnv(gym.Env):
             assert 0 + self.arena_threshold <= self.goal_point[0] <= self.arena_length - self.arena_threshold, f"Invalid goal point! x-coordinate out of bounds. Coordinate should be within {self.arena_threshold} and {self.arena_length - self.arena_threshold}."
             assert 0 + self.arena_threshold <= self.goal_point[1] <= self.arena_width - self.arena_threshold, f"Invalid goal point! y-coordinate out of bounds. Coordinate should be within {self.arena_threshold} and {self.arena_width - self.arena_threshold}."
 
-        self.prev_position = None
+        self.prev_sheepdog_position = None
+        self.prev_sheep_position = None
 
     def init_robots(self, initial_positions):
         robots = []
@@ -119,7 +120,7 @@ class HerdingSimEnv(gym.Env):
         observations = self.get_observations()
 
         # Compute reward, done, and info
-        reward, done = self.compute_reward_v3()
+        reward, done = self.compute_reward_v4()
         info = {}
 
         return observations, reward, done, info
@@ -474,11 +475,11 @@ class HerdingSimEnv(gym.Env):
 
         # check if the sheep dogs have stayed in the same position in two consecutive time steps
         tolerance = 0.025
-        if self.prev_position is not None:
+        if self.prev_sheepdog_position is not None:
             same_position = True
             for i in range(self.num_sheepdogs):
                 x, y, _ = self.robots[i].get_state()
-                prev_x, prev_y, _ = self.prev_position[i]
+                prev_x, prev_y, _ = self.prev_sheepdog_position[i]
                 dist = np.linalg.norm(np.array([x, y]) - np.array([prev_x, prev_y]))
                 if dist > tolerance:
                     same_position = False
@@ -489,10 +490,70 @@ class HerdingSimEnv(gym.Env):
                 reward += 50.0
 
         # save the current position for the next time step
-        self.prev_position = []
+        self.prev_sheepdog_position = []
         for i in range(self.num_sheepdogs):
             x, y, theta = self.robots[i].get_state()
-            self.prev_position.append([x, y, theta])
+            self.prev_sheepdog_position.append([x, y, theta])
+
+        return reward, done
+
+    def compute_reward_v4(self):
+        """
+        Compute the reward for the current state of the environment.
+
+        Reward is calculated on the following basis:
+        - Large positive reward for the sheep herd reaching the goal point
+        - Negative reward for the sheep dog staying in the same position in two consecutive time steps
+        - Positive reward for the sheep dog moving
+        - Positive reward for moving the sheep closer to the goal point
+
+        Returns:
+            float: Reward value
+        """
+
+        reward = 0.0
+
+        # check if the sheep herd has reached the goal point
+        done = self.check_done()
+        if done:
+            reward += 2500.0
+            return reward, done
+
+        # check if the sheep dogs have stayed in the same position in two consecutive time steps
+        tolerance = 0.025
+        if self.prev_sheepdog_position is not None:
+            same_position = True
+            for i in range(self.num_sheepdogs):
+                x, y, _ = self.robots[i].get_state()
+                prev_x, prev_y, _ = self.prev_sheepdog_position[i]
+                dist = np.linalg.norm(np.array([x, y]) - np.array([prev_x, prev_y]))
+                if dist > tolerance:
+                    same_position = False
+                    break
+            if not same_position:
+                reward += 50.0
+
+        # save the current sheepdog position for the next time step
+        self.prev_sheepdog_position = []
+        for i in range(self.num_sheepdogs):
+            x, y, theta = self.robots[i].get_state()
+            self.prev_sheepdog_position.append([x, y, theta])
+
+        # check if any of the sheep have moved closer to the goal point
+        if self.prev_sheep_position is not None:
+            for i in range(self.num_sheepdogs, len(self.robots)):
+                x, y, _ = self.robots[i].get_state()
+                prev_x, prev_y, _ = self.prev_sheep_position[i - self.num_sheepdogs]
+                dist = np.linalg.norm(np.array([x, y]) - np.array(self.goal_point))
+                prev_dist = np.linalg.norm(np.array([prev_x, prev_y]) - np.array(self.goal_point))
+                if dist < prev_dist:
+                    reward += 25.0
+
+        # save the current sheep position for the next time step
+        self.prev_sheep_position = []
+        for i in range(self.num_sheepdogs, len(self.robots)):
+            x, y, theta = self.robots[i].get_state()
+            self.prev_sheep_position.append([x, y, theta])
 
         return reward, done
 
