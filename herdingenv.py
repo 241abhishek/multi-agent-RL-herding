@@ -117,7 +117,7 @@ class HerdingSimEnv(gym.Env):
         observations = self.get_observations()
 
         # Compute reward, done, and info
-        reward, done = self.compute_reward()
+        reward, done = self.compute_reward_v2()
         info = {}
 
         return observations, reward, done, info
@@ -344,7 +344,7 @@ class HerdingSimEnv(gym.Env):
         obs.append(goal)
         return np.array(obs)
 
-    def compute_reward(self):
+    def compute_reward_v1(self):
         """
         Compute the reward for the current state of the environment.
 
@@ -404,6 +404,37 @@ class HerdingSimEnv(gym.Env):
         # check if the sheep-dogs are on the other side of the sheep herd and the goal point
         if sheep_dog_side != goal_side:
             reward += 25.0
+
+        # check if the sheep herd has reached the goal point
+        done = self.check_done()
+        if done:
+            reward += 2500.0
+
+        return reward, done
+    
+    def compute_reward_v2(self):
+        """
+        Compute the reward for the current state of the environment.
+
+        Reward is calculated on the following basis:
+        - Reward based on the distance of the sheep from the goal point
+        - Negative reward for each time step to encourage faster convergence
+        - Large positive reward for the sheep herd reaching the goal point
+
+        Returns:
+            float: Reward value
+        """
+
+        reward = 0.0
+
+        # calculate the distance of each sheep from the goal point
+        for i in range(self.num_sheepdogs, len(self.robots)):
+            x, y, _ = self.robots[i].get_state()
+            dist = np.linalg.norm(np.array([x, y]) - np.array(self.goal_point))
+            reward += -dist
+
+        # add negative reward for each time step
+        reward += -25.0
 
         # check if the sheep herd has reached the goal point
         done = self.check_done()
