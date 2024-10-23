@@ -120,7 +120,7 @@ class HerdingSimEnv(gym.Env):
         observations = self.get_observations()
 
         # Compute reward, done, and info
-        reward, done = self.compute_reward_v4()
+        reward, done = self.compute_reward_v5()
         info = {}
 
         return observations, reward, done, info
@@ -547,6 +547,49 @@ class HerdingSimEnv(gym.Env):
                 dist = np.linalg.norm(np.array([x, y]) - np.array(self.goal_point))
                 prev_dist = np.linalg.norm(np.array([prev_x, prev_y]) - np.array(self.goal_point))
                 if dist < prev_dist:
+                    reward += 25.0
+
+        # save the current sheep position for the next time step
+        self.prev_sheep_position = []
+        for i in range(self.num_sheepdogs, len(self.robots)):
+            x, y, theta = self.robots[i].get_state()
+            self.prev_sheep_position.append([x, y, theta])
+
+        return reward, done
+
+    def compute_reward_v5(self):
+        """
+        Compute the reward for the current state of the environment.
+
+        Reward is calculated on the following basis:
+        - Large positive reward for the sheep herd reaching the goal point
+        - Positive reward for moving the sheep closer to the goal point for sheep outside the goal zone
+        - Negative reward for each time step
+
+        Returns:
+            float: Reward value
+        """
+
+        reward = 0.0
+
+        # check if the sheep herd has reached the goal point
+        done = self.check_done()
+        if done:
+            reward += 2500.0
+            return reward, done
+
+        # add negative reward for each time step
+        reward += -1.0
+
+        # check if any of the sheep have moved closer to the goal point
+        if self.prev_sheep_position is not None:
+            for i in range(self.num_sheepdogs, len(self.robots)):
+                x, y, _ = self.robots[i].get_state()
+                prev_x, prev_y, _ = self.prev_sheep_position[i - self.num_sheepdogs]
+                dist = np.linalg.norm(np.array([x, y]) - np.array(self.goal_point))
+                prev_dist = np.linalg.norm(np.array([prev_x, prev_y]) - np.array(self.goal_point))
+                # check if dist is less than the previous distance and that the sheep is outside the goal tolerance zone
+                if dist < prev_dist and dist > self.goal_tolreance:
                     reward += 25.0
 
         # save the current sheep position for the next time step
