@@ -45,7 +45,7 @@ class HerdingSimEnv(gym.Env):
 
         # Action and observation space
         # Action space is wheel velocities for sheep-dogs
-        self.action_space = spaces.Box(low=-max_wheel_velocity, high=max_wheel_velocity, 
+        self.action_space = spaces.Box(low=-1, high=1, 
                                        shape=(num_sheepdogs * 2,), dtype=np.float32)
         # Observation space is positions and orientations of all robots plus the goal point
         self.observation_space = spaces.Box(low=-np.inf, high=np.inf, 
@@ -102,8 +102,8 @@ class HerdingSimEnv(gym.Env):
         assert len(action) == self.num_sheepdogs * 2, "Invalid action! Incorrect number of actions."
         # Update sheep-dogs using RL agent actions
         for i in range(self.num_sheepdogs):
-            left_wheel_velocity = action[i * 2]
-            right_wheel_velocity = action[i * 2 + 1]
+            left_wheel_velocity = action[i * 2] * self.max_wheel_velocity # scale the action to the max wheel velocity
+            right_wheel_velocity = action[i * 2 + 1] * self.max_wheel_velocity # scale the action to the max wheel velocity
             self.robots[i].update_position(left_wheel_velocity, right_wheel_velocity)
 
             # clip the sheep-dog position if updated position is outside the arena
