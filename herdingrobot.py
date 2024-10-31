@@ -15,5 +15,11 @@ class DifferentialDriveRobot:
         self.y += v * np.sin(self.theta) * dt
         self.theta += omega * dt
 
+        # Limit theta to [-pi, pi]
+        if self.theta > np.pi:
+            self.theta -= 2*np.pi
+        if self.theta < -np.pi:
+            self.theta += 2*np.pi
+
     def get_state(self):
         return np.array([self.x, self.y, self.theta])
