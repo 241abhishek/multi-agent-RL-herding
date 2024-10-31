@@ -139,6 +139,8 @@ class HerdingSimEnv(gym.Env):
 
         # Gather new observations (positions, orientations)
         observations = self.get_observations()
+        # normalize the observations
+        observations = self.normalize_observation(observations)
 
         # Compute reward, done, and info
         reward, done = self.compute_reward_v5()
@@ -287,8 +289,12 @@ class HerdingSimEnv(gym.Env):
         self.goal_point = [goal_x, goal_y]
 
         # Generate initial positions for all robots based on the training state
-        initial_positions = self.generate_robot_positions(self.train_state, self.goal_point)
-        self.robots = self.init_robots(initial_positions)
+        robots=[[2.0, 2.0, np.pi/4], [5.0, 5.0, np.pi/4]]
+        if robots is not None:
+            self.robots = self.init_robots(robots)
+        else:
+            initial_positions = self.generate_robot_positions(self.train_state, self.goal_point)
+            self.robots = self.init_robots(initial_positions)
 
         # clear the frames
         self.frames = []
@@ -419,6 +425,18 @@ class HerdingSimEnv(gym.Env):
         goal = np.array(self.goal_point + [0.0]) # add a dummy orientation
         obs.append(goal)
         return np.array(obs)
+
+    def normalize_observation(self, observation):
+        # Normalize the observations (both positions and orientations)
+        
+        for i in range(len(observation)):
+            # Normalize the position
+            observation[i][0] = observation[i][0] / self.arena_length
+            observation[i][1] = observation[i][1] / self.arena_width
+            # Normalize the orientation (between -pi and pi to between -1 and 1)
+            observation[i][2] = observation[i][2] / np.pi
+            
+        return observation
 
     def compute_reward_v1(self):
         """
@@ -637,7 +655,6 @@ class HerdingSimEnv(gym.Env):
         Reward is calculated on the following basis:
         - Large positive reward for the sheep herd reaching the goal point
         - Positive reward for moving the sheep closer to the goal point for sheep outside the goal zone
-        - Negative reward for each time step
 
         Returns:
             float: Reward value
@@ -648,11 +665,11 @@ class HerdingSimEnv(gym.Env):
         # check if the sheep herd has reached the goal point
         done = self.check_done()
         if done:
-            reward += 2500.0
+            reward += 1500.0
             return reward, done
 
         # add negative reward for each time step
-        reward += -1.0
+        # reward += -1.0
 
         # check if any of the sheep have moved closer to the goal point
         if self.prev_sheep_position is not None:
