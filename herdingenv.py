@@ -1,5 +1,5 @@
-import gym
-from gym import spaces
+import gymnasium as gym
+from gymnasium import spaces
 import numpy as np
 from herdingrobot import DifferentialDriveRobot
 import pygame
@@ -69,7 +69,7 @@ class HerdingSimEnv(gym.Env):
         self.action_space = spaces.Box(low=-1, high=1, 
                                        shape=(num_sheepdogs * 2,), dtype=np.float32)
         # Observation space is positions and orientations of all robots plus the goal point
-        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, 
+        self.observation_space = spaces.Box(low=-1, high=1, 
                                             shape=(num_sheep + num_sheepdogs + 1, 3), dtype=np.float32)
 
         # Convert to pygame units (pixels)
@@ -142,11 +142,11 @@ class HerdingSimEnv(gym.Env):
         # normalize the observations
         observations = self.normalize_observation(observations)
 
-        # Compute reward, done, and info
-        reward, done = self.compute_reward_v5()
+        # Compute reward, terminated, and info
+        reward, terminated, truncated = self.compute_reward_v5()
         info = {}
 
-        return observations, reward, done, info
+        return observations, reward, terminated, truncated, info
 
     def render(self, mode=None, fps=1):
         # Initialize pygame if it hasn't been already
@@ -281,7 +281,8 @@ class HerdingSimEnv(gym.Env):
 
         return initial_positions
         
-    def reset(self):
+    def reset(self, seed=None, options=None):
+        super().reset(seed=seed)
         # Reset the environment
         # Generate random goal point for the sheep herd
         goal_x = np.random.uniform(0 + self.arena_threshold, self.arena_length - self.arena_threshold)
@@ -302,8 +303,12 @@ class HerdingSimEnv(gym.Env):
         # reset the step counter
         self.curr_iter = 0
 
-        # Return the initial observation
-        return self.get_observations()
+        # Return the initial observation and empty info
+        info = {}
+        obs = self.get_observations()
+        obs = self.normalize_observation(obs)
+
+        return obs, info 
 
     def get_video_frames(self):
         frames = np.array(self.frames)
@@ -500,11 +505,11 @@ class HerdingSimEnv(gym.Env):
             reward += 25.0
 
         # check if the sheep herd has reached the goal point
-        done = self.check_done()
-        if done:
+        terminated = self.check_terminated()
+        if terminated:
             reward += 2500.0
 
-        return reward, done
+        return reward, terminated
     
     def compute_reward_v2(self):
         """
@@ -531,11 +536,11 @@ class HerdingSimEnv(gym.Env):
         reward += -25.0
 
         # check if the sheep herd has reached the goal point
-        done = self.check_done()
-        if done:
+        terminated = self.check_terminated()
+        if terminated:
             reward += 2500.0
 
-        return reward, done
+        return reward, terminated
 
     def compute_reward_v3(self):
         """
@@ -560,8 +565,8 @@ class HerdingSimEnv(gym.Env):
             reward += -dist
 
         # check if the sheep herd has reached the goal point
-        done = self.check_done()
-        if done:
+        terminated = self.check_terminated()
+        if terminated:
             reward += 2500.0
 
         # check if the sheep dogs have stayed in the same position in two consecutive time steps
@@ -586,7 +591,7 @@ class HerdingSimEnv(gym.Env):
             x, y, theta = self.robots[i].get_state()
             self.prev_sheepdog_position.append([x, y, theta])
 
-        return reward, done
+        return reward, terminated
 
     def compute_reward_v4(self):
         """
@@ -605,10 +610,10 @@ class HerdingSimEnv(gym.Env):
         reward = 0.0
 
         # check if the sheep herd has reached the goal point
-        done = self.check_done()
-        if done:
+        terminated = self.check_terminated()
+        if terminated:
             reward += 2500.0
-            return reward, done
+            return reward, terminated
 
         # check if the sheep dogs have stayed in the same position in two consecutive time steps
         tolerance = 0.025
@@ -646,7 +651,7 @@ class HerdingSimEnv(gym.Env):
             x, y, theta = self.robots[i].get_state()
             self.prev_sheep_position.append([x, y, theta])
 
-        return reward, done
+        return reward, terminated
 
     def compute_reward_v5(self):
         """
@@ -663,13 +668,18 @@ class HerdingSimEnv(gym.Env):
         reward = 0.0
 
         # check if the sheep herd has reached the goal point
-        done = self.check_done()
-        if done:
-            reward += 1500.0
-            return reward, done
+        terminated = self.check_terminated()
+        truncated = self.check_truncated()
+        if terminated:
+            reward += 10000.0
+            return reward, terminated, truncated
+
+        if truncated:
+            reward += -1.0
+            return reward, terminated, truncated
 
         # add negative reward for each time step
-        # reward += -1.0
+        reward += -1.0
 
         # check if any of the sheep have moved closer to the goal point
         if self.prev_sheep_position is not None:
@@ -680,7 +690,7 @@ class HerdingSimEnv(gym.Env):
                 prev_dist = np.linalg.norm(np.array([prev_x, prev_y]) - np.array(self.goal_point))
                 # check if dist is less than the previous distance and that the sheep is outside the goal tolerance zone
                 if dist < prev_dist and dist > self.goal_tolreance:
-                    reward += 25.0
+                    reward += 100.0
 
         # save the current sheep position for the next time step
         self.prev_sheep_position = []
@@ -688,21 +698,25 @@ class HerdingSimEnv(gym.Env):
             x, y, theta = self.robots[i].get_state()
             self.prev_sheep_position.append([x, y, theta])
 
-        return reward, done
+        return reward, terminated, truncated
 
-    def check_done(self):
-        # count the number of steps taken in the episode
-        self.curr_iter += 1
-        if self.curr_iter >= self.MAX_STEPS:
-            return True
+    def check_terminated(self):
         # check if the sheep herd has reached the goal point
-        done = True
+        terminated = True
         for i in range(self.num_sheepdogs, len(self.robots)):
             x, y, _ = self.robots[i].get_state()
             dist = np.linalg.norm(np.array([x, y]) - np.array(self.goal_point))
             if dist > self.goal_tolreance:
-                done = False
-        return done
+                terminated = False
+        return terminated
+
+    def check_truncated(self):
+        # check if the episode is truncated
+        self.curr_iter += 1
+        if self.curr_iter >= self.MAX_STEPS:
+            return True
+        
+        return False
 
     def diff_drive_motion_model(self, vec_desired, pose) -> np.array:
         """
