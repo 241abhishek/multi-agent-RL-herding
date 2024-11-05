@@ -298,7 +298,7 @@ class HerdingSimEnv(gym.Env):
             self.robots = self.init_robots(initial_positions)
 
         # clear the frames
-        self.frames = []
+        # self.frames = []
 
         # reset the step counter
         self.curr_iter = 0
@@ -315,6 +315,9 @@ class HerdingSimEnv(gym.Env):
         # add a time dimension to the video
         frames = np.expand_dims(frames, axis=0)
         return frames
+
+    def reset_frames(self):
+        self.frames = []
 
     def compute_sheep_actions(self):
         """

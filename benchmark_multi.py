@@ -1,5 +1,5 @@
 from stable_baselines3 import PPO
-from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv
+from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv, VecMonitor
 from herdingenv import HerdingSimEnv
 import time
 import numpy as np
@@ -43,13 +43,16 @@ def benchmark_vec_env(env_type, num_envs=4, total_timesteps=10000):
     # Create vectorized environment based on type
     if env_type == "dummy":
         env = DummyVecEnv([make_env(i) for i in range(num_envs)])
+        env = VecMonitor(env)
     elif env_type == "subproc":
         env = SubprocVecEnv([make_env(i) for i in range(num_envs)])
+        env = VecMonitor(env)
     else:
         raise ValueError("Invalid environment type. Choose either 'dummy' or 'subproc'.")
 
     # Initialize PPO model
-    model = PPO("MlpPolicy", env, verbose=0)
+    model = PPO("MlpPolicy", env, device="cpu", n_steps = 5000, verbose=0)
+    # model = PPO("MlpPolicy", env, n_steps=10000, verbose=0)
 
     # Time the training
     start_time = time.time()
@@ -67,10 +70,11 @@ def benchmark_vec_env(env_type, num_envs=4, total_timesteps=10000):
 if __name__ == "__main__":
 
     # Define benchmark parameters
-    for num_envs in range(10, 100, 10):
+    for num_envs in range(20, 21, 4):
 
         print(f"\nBenchmarking with {num_envs} environments...")
-        total_timesteps = 25000
+        # total_timesteps = 150000
+        total_timesteps = 200000 
 
         # Benchmark training time with SubprocVecEnv
         print("Benchmarking training time with SubprocVecEnv...")
