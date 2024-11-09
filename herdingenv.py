@@ -111,6 +111,8 @@ class HerdingSimEnv(gym.Env):
 
         self.prev_sheepdog_position = None
         self.prev_sheep_position = None
+        self.min_score = float('inf')
+        self.reward_scaling_factor = 1.0
 
     def init_robots(self, initial_positions):
         robots = []
@@ -143,7 +145,7 @@ class HerdingSimEnv(gym.Env):
         observations = self.normalize_observation(observations)
 
         # Compute reward, terminated, and info
-        reward, terminated, truncated = self.compute_reward_v5()
+        reward, terminated, truncated = self.compute_reward_v6()
         info = {}
 
         return observations, reward, terminated, truncated, info
@@ -299,6 +301,9 @@ class HerdingSimEnv(gym.Env):
 
         # clear the frames
         # self.frames = []
+
+        # reset the min score
+        self.min_score = float('inf')
 
         # reset the step counter
         self.curr_iter = 0
@@ -700,6 +705,52 @@ class HerdingSimEnv(gym.Env):
         for i in range(self.num_sheepdogs, len(self.robots)):
             x, y, theta = self.robots[i].get_state()
             self.prev_sheep_position.append([x, y, theta])
+
+        return reward, terminated, truncated
+
+    def compute_reward_v6(self):
+        """
+        Compute the reward based on score improvements from the minimum achieved score.
+        Score is calculated based on sheep distance from goal, with:
+        - Positive rewards for improving the minimum score achieved
+        - Time penalty per step
+        - Large terminal reward for success
+        - No penalty for score reduction
+
+        Returns:
+            float: Reward value
+        """
+
+        reward = 0.0
+    
+        # Check termination conditions first
+        terminated = self.check_terminated()
+        truncated = self.check_truncated()
+        
+        # Give large reward for successful herding
+        if terminated:
+            reward += 10000.0
+            return reward, terminated, truncated
+            
+        # Apply time penalty if truncated
+        if truncated:
+            reward += -1.0
+            return reward, terminated, truncated
+
+        # add negative reward for each time step
+        reward += -1.0
+
+        # Calculate score based on sheep distance from goal
+        score = 0.0
+        for i in range(self.num_sheepdogs, len(self.robots)):
+            x, y, _ = self.robots[i].get_state()
+            dist = np.linalg.norm(np.array([x, y]) - np.array(self.goal_point))
+            score += dist
+
+        # Update minimum score achieved
+        if score < self.min_score:
+            reward += 50.0
+            self.min_score = score
 
         return reward, terminated, truncated
 
