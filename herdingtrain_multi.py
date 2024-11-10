@@ -34,7 +34,7 @@ def make_env():
 
 if __name__ == "__main__":
     # Initialize wandb for logging
-    name = "herding"
+    name = "herding_multi_PPO"
     time_now = time.strftime("%Y%m%d-%H%M%S")
     run = wandb.init(project='multi_herding_rl', name=f"{name}-{time_now}" , sync_tensorboard=True, save_code=True)
     # define custom metrics for logging

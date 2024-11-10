@@ -2,6 +2,7 @@
 /logs
 /models
 /wandb
+/eval_models
 
 *.vscode
 *__pycache__

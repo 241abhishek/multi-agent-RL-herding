@@ -292,12 +292,22 @@ class HerdingSimEnv(gym.Env):
         self.goal_point = [goal_x, goal_y]
 
         # Generate initial positions for all robots based on the training state
-        robots=[[2.0, 2.0, np.pi/4], [5.0, 5.0, np.pi/4]]
-        if robots is not None:
-            self.robots = self.init_robots(robots)
-        else:
-            initial_positions = self.generate_robot_positions(self.train_state, self.goal_point)
-            self.robots = self.init_robots(initial_positions)
+        # robots=[[2.0, 2.0, np.pi/4], [5.0, 5.0, np.pi/4]]
+        # robots = None
+        # if robots is not None:
+        #     self.robots = self.init_robots(robots)
+        # else:
+        #     initial_positions = self.generate_robot_positions(self.train_state, self.goal_point)
+        #     self.robots = self.init_robots(initial_positions)
+
+        # generate random initial positions within the arena if not provided
+        initial_positions = []
+        for _ in range(self.num_sheep + self.num_sheepdogs):
+            x = np.random.uniform(0, self.arena_length)
+            y = np.random.uniform(0, self.arena_width)
+            theta = np.random.uniform(-np.pi, np.pi)
+            initial_positions.append([x, y, theta])
+        self.robots = self.init_robots(initial_positions)
 
         # clear the frames
         # self.frames = []
