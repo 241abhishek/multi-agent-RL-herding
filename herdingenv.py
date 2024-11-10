@@ -75,7 +75,7 @@ class HerdingSimEnv(gym.Env):
                                         shape=(num_sheepdogs,), dtype=np.float32)
         # Observation space is positions and orientations of all robots plus the goal point
         self.observation_space = spaces.Box(low=-1, high=1, 
-                                            shape=(num_sheep + num_sheepdogs + 1, 3), dtype=np.float32)
+                                            shape=((num_sheep + num_sheepdogs)*3 + 2,), dtype=np.float32)
 
         # Convert to pygame units (pixels)
         self.scale_factor = 50  # 1 meter = 50 pixels, adjust as needed
@@ -175,6 +175,9 @@ class HerdingSimEnv(gym.Env):
         observations = self.get_observations()
         # normalize the observations
         observations = self.normalize_observation(observations)
+
+        # unpack the observations
+        observations = self.unpack_observation(observations)
 
         # Compute reward, terminated, and info
         reward, terminated, truncated = self.compute_reward_v6()
@@ -432,6 +435,15 @@ class HerdingSimEnv(gym.Env):
             observation[i][2] = observation[i][2] / np.pi
             
         return observation
+
+    def unpack_observation(self, observation):
+        # unpack the observation sublists into one list
+        obs = []
+        for i in range(len(observation)):
+            obs.extend(observation[i])
+        # remove last element from the list as it is a dummy orientation for the goal point
+        obs.pop()
+        return np.array(obs, dtype=np.float32)
 
     def compute_reward_v1(self):
         """
