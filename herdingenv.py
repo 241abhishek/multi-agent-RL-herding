@@ -27,7 +27,7 @@ class TrainState(Enum):
 class HerdingSimEnv(gym.Env):
     def __init__(self, arena_length, arena_width, num_sheep, num_sheepdogs, 
                  robot_distance_between_wheels, robot_wheel_radius, max_wheel_velocity, 
-                 initial_positions=None, goal_point=None):
+                 initial_positions=None, goal_point=None, action_mode="wheel"):
         """
         Initialize the simulation environment.
 
@@ -64,9 +64,15 @@ class HerdingSimEnv(gym.Env):
         self.robots = self.init_robots(initial_positions) 
 
         # Action and observation space
-        # Action space is wheel velocities for sheep-dogs
-        self.action_space = spaces.Box(low=-1, high=1, 
-                                       shape=(num_sheepdogs * 2,), dtype=np.float32)
+        # Action space is wheel velocities for sheep-dogs if action_mode is "wheel"
+        self.action_mode = action_mode
+        if action_mode == "wheel":
+            self.action_space = spaces.Box(low=-1, high=1, 
+                                        shape=(num_sheepdogs * 2,), dtype=np.float32)
+        # Action space is the desired vector for sheep-dogs if action_mode is "vector"
+        elif action_mode == "vector":
+            self.action_space = spaces.Box(low=-1, high=1, 
+                                        shape=(num_sheepdogs,), dtype=np.float32)
         # Observation space is positions and orientations of all robots plus the goal point
         self.observation_space = spaces.Box(low=-1, high=1, 
                                             shape=(num_sheep + num_sheepdogs + 1, 3), dtype=np.float32)
@@ -94,7 +100,7 @@ class HerdingSimEnv(gym.Env):
         self.p_s = 1.0 # relative strength of repulsion from the sheep-dogs
 
         # arena parameters
-        self.point_dist = 0.1 # distance between the point that is controlled using the vector headings on the sheep and the center of the sheep
+        self.point_dist = 0.1 # distance between the point that is controlled using the vector headings on the robot and the center of the robot
         self.arena_threshold = 0.5 # distance from the boundary at which the sheep will start moving away from the boundary
         self.arena_rep = 0.5 # repulsion force from the boundary
 
@@ -121,19 +127,46 @@ class HerdingSimEnv(gym.Env):
 
     def step(self, action):
         # check if the action is valid
-        assert len(action) == self.num_sheepdogs * 2, "Invalid action! Incorrect number of actions."
-        # Update sheep-dogs using RL agent actions
-        for i in range(self.num_sheepdogs):
-            left_wheel_velocity = action[i * 2] * self.max_wheel_velocity # scale the action to the max wheel velocity
-            right_wheel_velocity = action[i * 2 + 1] * self.max_wheel_velocity # scale the action to the max wheel velocity
-            self.robots[i].update_position(left_wheel_velocity, right_wheel_velocity)
+        if self.action_mode == "wheel": 
+            assert len(action) == self.num_sheepdogs * 2, "Invalid action! Incorrect number of actions."
+        elif self.action_mode == "vector":
+            assert len(action) == self.num_sheepdogs, "Invalid action! Incorrect number of actions."
 
-            # clip the sheep-dog position if updated position is outside the arena
-            x, y, _ = self.robots[i].get_state()
-            x = np.clip(x, 0.0, self.arena_length)
-            y = np.clip(y, 0.0, self.arena_width)
-            self.robots[i].x = x
-            self.robots[i].y = y
+        # Update sheep-dogs using RL agent actions
+        if self.action_mode == "wheel":
+            for i in range(self.num_sheepdogs):
+                left_wheel_velocity = action[i * 2] * self.max_wheel_velocity # scale the action to the max wheel velocity
+                right_wheel_velocity = action[i * 2 + 1] * self.max_wheel_velocity # scale the action to the max wheel velocity
+                self.robots[i].update_position(left_wheel_velocity, right_wheel_velocity)
+
+                # clip the sheep-dog position if updated position is outside the arena
+                x, y, _ = self.robots[i].get_state()
+                x = np.clip(x, 0.0, self.arena_length)
+                y = np.clip(y, 0.0, self.arena_width)
+                self.robots[i].x = x
+                self.robots[i].y = y
+
+        elif self.action_mode == "vector":
+        # action is the desired heading angle for the sheep-dogs between -1 and 1
+            for i in range(self.num_sheepdogs):
+                x, y, theta = self.robots[i].get_state()
+                # scale to action to be between -pi and pi
+                action[i] = action[i] * np.pi
+                vec_desired = np.array([np.cos(action[i]), np.sin(action[i])])
+                vec_desired = vec_desired / np.linalg.norm(vec_desired)
+
+                # use the diff drive motion model to calculate the wheel velocities
+                wheel_velocities = self.diff_drive_motion_model(vec_desired, [x, y, theta], self.max_wheel_velocity)
+
+                # update the sheep-dog position based on the wheel velocities
+                self.robots[i].update_position(wheel_velocities[0], wheel_velocities[1])
+
+                # clip the sheep-dog position if updated position is outside the arena
+                x, y, _ = self.robots[i].get_state()
+                x = np.clip(x, 0.0, self.arena_length)
+                y = np.clip(y, 0.0, self.arena_width)
+                self.robots[i].x = x
+                self.robots[i].y = y
 
         # Update sheep positions using predefined behavior 
         self.compute_sheep_actions()
@@ -313,7 +346,7 @@ class HerdingSimEnv(gym.Env):
                 vec_desired = vec_desired / np.linalg.norm(vec_desired) # normalize the vector
 
                 # use the diff drive motion model to calculate the wheel velocities
-                wheel_velocities = self.diff_drive_motion_model(vec_desired, [x, y, theta])
+                wheel_velocities = self.diff_drive_motion_model(vec_desired, [x, y, theta], self.max_sheep_wheel_vel)
 
                 # update the sheep position based on the wheel velocities
                 self.robots[i].update_position(wheel_velocities[0], wheel_velocities[1])
@@ -373,7 +406,7 @@ class HerdingSimEnv(gym.Env):
             if vec_desired[0] == 0.0 and vec_desired[1] == 0.0:
                 wheel_velocities = np.array([0.0, 0.0])
             else:
-                wheel_velocities = self.diff_drive_motion_model(vec_desired, [x, y, theta])
+                wheel_velocities = self.diff_drive_motion_model(vec_desired, [x, y, theta], self.max_sheep_wheel_vel)
 
             # update the sheep position based on the wheel velocities
             self.robots[i].update_position(wheel_velocities[0], wheel_velocities[1])
@@ -721,16 +754,16 @@ class HerdingSimEnv(gym.Env):
         
         return False
 
-    def diff_drive_motion_model(self, vec_desired, pose) -> np.array:
+    def diff_drive_motion_model(self, vec_desired, pose, max_vel) -> np.array:
         """
         Compute the wheel velocities for the sheep based on the desired and current heading vectors.
 
         Args:
             vec_desired (np.array): Desired heading vector
-            pose (np.array): Current position and orientation of the sheep
+            pose (np.array): Current position and orientation of the robot
 
         Returns:
-            np.array: Wheel velocities for the sheep
+            np.array: Wheel velocities for the robot
         """
 
         # calculate the angle for the desired heading vector
@@ -757,6 +790,6 @@ class HerdingSimEnv(gym.Env):
 
         # normalize and scale the wheel velocities
         max_wheel_velocity = max(abs(left_wheel_velocity), abs(right_wheel_velocity))
-        wheel_velocities = wheel_velocities / max_wheel_velocity * self.max_sheep_wheel_vel
+        wheel_velocities = wheel_velocities / max_wheel_velocity * max_vel 
 
         return wheel_velocities
