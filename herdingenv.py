@@ -27,7 +27,7 @@ class TrainState(Enum):
 class HerdingSimEnv(gym.Env):
     def __init__(self, arena_length, arena_width, num_sheep, num_sheepdogs, 
                  robot_distance_between_wheels, robot_wheel_radius, max_wheel_velocity, 
-                 initial_positions=None, goal_point=None, train_state=TrainState.MEDIUM):
+                 initial_positions=None, goal_point=None):
         """
         Initialize the simulation environment.
 
@@ -51,7 +51,6 @@ class HerdingSimEnv(gym.Env):
         self.distance_between_wheels = robot_distance_between_wheels
         self.wheel_radius = robot_wheel_radius
         self.max_wheel_velocity = max_wheel_velocity
-        self.train_state = train_state
         # generate random initial positions within the arena if not provided
         if initial_positions is None:
             initial_positions = []
@@ -226,63 +225,6 @@ class HerdingSimEnv(gym.Env):
         frame = np.moveaxis(frame, -1, 0)
         self.frames.append(frame)  # Convert Pygame surface to numpy array
 
-    def generate_robot_positions(self, state, goal_point):
-        """
-        Generate robot positions based on the training state.
-        - all generated positions are within a radius of X meters from the goal point and within the arena bounds
-        - state == RANDOM -> Random spawn locations for all robots (exception)
-        """
-
-        initial_positions = []
-
-        if state == TrainState.RANDOM:
-            for _ in range(self.num_sheep + self.num_sheepdogs):
-                x = np.random.uniform(0, self.arena_length)
-                y = np.random.uniform(0, self.arena_width)
-                theta = np.random.uniform(-np.pi, np.pi)
-                initial_positions.append([x, y, theta])
-
-        elif state == TrainState.CLOSE: # 2.5 meters from the goal point
-            # print("Generating initial positions for the robots close to the goal point.")
-            # Generate initial positions for all robots close to the goal point
-            # all robots are within a radius of 2 meters from the goal point and within the arena bounds
-            for _ in range(self.num_sheep + self.num_sheepdogs):
-                x = np.random.uniform(goal_point[0] - 2.5, goal_point[0] + 2.5)
-                y = np.random.uniform(goal_point[1] - 2.5, goal_point[1] + 2.5)
-                # ensure the generated position is within the arena bounds
-                x = np.clip(x, 0, self.arena_length)
-                y = np.clip(y, 0, self.arena_width)
-                theta = np.random.uniform(-np.pi, np.pi)
-                initial_positions.append([x, y, theta])
-
-        elif state == TrainState.MEDIUM: # 5 meters from the goal point
-            # print("Generating initial positions for the robots at a medium distance from the goal point.")
-            # Generate initial positions for all robots at a medium distance from the goal point
-            # all robots are within a radius of 5 meters from the goal point and within the arena bounds
-            for _ in range(self.num_sheep + self.num_sheepdogs):
-                x = np.random.uniform(goal_point[0] - 5, goal_point[0] + 5)
-                y = np.random.uniform(goal_point[1] - 5, goal_point[1] + 5)
-                # ensure the generated position is within the arena bounds
-                x = np.clip(x, 0, self.arena_length)
-                y = np.clip(y, 0, self.arena_width)
-                theta = np.random.uniform(-np.pi, np.pi)
-                initial_positions.append([x, y, theta])
-
-        elif state == TrainState.FAR: # 7.5 meters from the goal point
-            # print("Generating initial positions for the robots far from the goal point.")
-            # Generate initial positions for all robots far from the goal point
-            # all robots are within a radius of 7.5 meters from the goal point and within the arena bounds
-            for _ in range(self.num_sheep + self.num_sheepdogs):
-                x = np.random.uniform(goal_point[0] - 7.5, goal_point[0] + 7.5)
-                y = np.random.uniform(goal_point[1] - 7.5, goal_point[1] + 7.5)
-                # ensure the generated position is within the arena bounds
-                x = np.clip(x, 0, self.arena_length)
-                y = np.clip(y, 0, self.arena_width)
-                theta = np.random.uniform(-np.pi, np.pi)
-                initial_positions.append([x, y, theta])
-
-        return initial_positions
-        
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
         # Reset the environment
@@ -296,9 +238,6 @@ class HerdingSimEnv(gym.Env):
         # robots = None
         # if robots is not None:
         #     self.robots = self.init_robots(robots)
-        # else:
-        #     initial_positions = self.generate_robot_positions(self.train_state, self.goal_point)
-        #     self.robots = self.init_robots(initial_positions)
 
         # generate random initial positions within the arena if not provided
         initial_positions = []
