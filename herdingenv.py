@@ -72,7 +72,7 @@ class HerdingSimEnv(gym.Env):
         # Action space is the desired vector for sheep-dogs if action_mode is "vector"
         elif action_mode == "vector":
             self.action_space = spaces.Box(low=-1, high=1, 
-                                        shape=(num_sheepdogs,), dtype=np.float32)
+                                        shape=(num_sheepdogs * 2,), dtype=np.float32)
         # Observation space is positions and orientations of all robots plus the goal point
         self.observation_space = spaces.Box(low=-1, high=1, 
                                             shape=((num_sheep + num_sheepdogs)*3 + 2,), dtype=np.float32)
@@ -130,7 +130,7 @@ class HerdingSimEnv(gym.Env):
         if self.action_mode == "wheel": 
             assert len(action) == self.num_sheepdogs * 2, "Invalid action! Incorrect number of actions."
         elif self.action_mode == "vector":
-            assert len(action) == self.num_sheepdogs, "Invalid action! Incorrect number of actions."
+            assert len(action) == self.num_sheepdogs * 2, "Invalid action! Incorrect number of actions."
 
         # Update sheep-dogs using RL agent actions
         if self.action_mode == "wheel":
@@ -147,16 +147,21 @@ class HerdingSimEnv(gym.Env):
                 self.robots[i].y = y
 
         elif self.action_mode == "vector":
-        # action is the desired heading angle for the sheep-dogs between -1 and 1
+        
             for i in range(self.num_sheepdogs):
+                # action[0] is the desired speed value for the sheep-dogs between -1 and 1
+                # map the desired speed value to the max wheel velocity
+                desired_speed = (action[i * 2] + 1) * self.max_wheel_velocity / 2
+
+                # action[1] is the desired heading angle for the sheep-dogs between -1 and 1
                 x, y, theta = self.robots[i].get_state()
                 # scale to action to be between -pi and pi
-                action[i] = action[i] * np.pi
-                vec_desired = np.array([np.cos(action[i]), np.sin(action[i])])
+                action[i * 2 + 1] = action[i * 2 + 1] * np.pi
+                vec_desired = np.array([np.cos(action[i * 2 + 1]), np.sin(action[i * 2 + 1])])
                 vec_desired = vec_desired / np.linalg.norm(vec_desired)
 
                 # use the diff drive motion model to calculate the wheel velocities
-                wheel_velocities = self.diff_drive_motion_model(vec_desired, [x, y, theta], self.max_wheel_velocity)
+                wheel_velocities = self.diff_drive_motion_model(vec_desired, [x, y, theta], desired_speed)
 
                 # update the sheep-dog position based on the wheel velocities
                 self.robots[i].update_position(wheel_velocities[0], wheel_velocities[1])
