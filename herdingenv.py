@@ -51,17 +51,6 @@ class HerdingSimEnv(gym.Env):
         self.distance_between_wheels = robot_distance_between_wheels
         self.wheel_radius = robot_wheel_radius
         self.max_wheel_velocity = max_wheel_velocity
-        # generate random initial positions within the arena if not provided
-        if initial_positions is None:
-            initial_positions = []
-            for _ in range(num_sheep + num_sheepdogs):
-                x = np.random.uniform(0, self.arena_length)
-                y = np.random.uniform(0, self.arena_width)
-                theta = np.random.uniform(-np.pi, np.pi)
-                initial_positions.append([x, y, theta])
-        # hold the information of all robots in self.robots
-        # the first num_sheepdogs robots are sheepdogs and the rest are sheep
-        self.robots = self.init_robots(initial_positions) 
 
         # Action and observation space
         # Action space is wheel velocities for sheep-dogs if action_mode is "wheel"
@@ -77,6 +66,9 @@ class HerdingSimEnv(gym.Env):
         self.observation_space = spaces.Box(low=-1, high=1, 
                                             shape=((num_sheep + num_sheepdogs)*3 + 2,), dtype=np.float32)
 
+        # self.observation_space = spaces.Box(low=-1, high=1, 
+                                            # shape=(num_sheep + num_sheepdogs + 1, 3), dtype=np.float32)
+
         # Convert to pygame units (pixels)
         self.scale_factor = 50  # 1 meter = 50 pixels, adjust as needed
         self.arena_length_px = self.arena_length * self.scale_factor
@@ -87,7 +79,7 @@ class HerdingSimEnv(gym.Env):
 
         # set max number of steps for each episode
         self.curr_iter = 0
-        self.MAX_STEPS = 2500
+        self.MAX_STEPS = 5000
 
         # simulation parameters
         # these are hardcoded parameters that define the behavior of the sheep
@@ -104,11 +96,27 @@ class HerdingSimEnv(gym.Env):
         self.arena_threshold = 0.5 # distance from the boundary at which the sheep will start moving away from the boundary
         self.arena_rep = 0.5 # repulsion force from the boundary
 
+        # generate random initial positions within the arena if not provided
+        if initial_positions is None:
+            initial_positions = []
+            for _ in range(num_sheep + num_sheepdogs):
+                x = np.random.uniform(self.arena_threshold, self.arena_length - self.arena_threshold)
+                y = np.random.uniform(self.arena_threshold, self.arena_width - self.arena_threshold)
+                theta = np.random.uniform(-np.pi, np.pi)
+                initial_positions.append([x, y, theta])
+        # hold the information of all robots in self.robots
+        # the first num_sheepdogs robots are sheepdogs and the rest are sheep
+        self.robots = self.init_robots(initial_positions) 
+
         # set goal point parameters for the sheep herd
         self.goal_tolreance = 1.5 # accepatable tolerance for the sheep to be considered at the goal point 
         self.goal_point = goal_point
         if self.goal_point is None:
-            self.goal_point = [self.arena_length / 2, self.arena_width / 2]
+            # self.goal_point = [self.arena_length / 2, self.arena_width / 2]
+            # generate random goal point for the sheep herd
+            goal_x = np.random.uniform(0 + self.arena_threshold, self.arena_length - self.arena_threshold)
+            goal_y = np.random.uniform(0 + self.arena_threshold, self.arena_width - self.arena_threshold)
+            self.goal_point = [goal_x, goal_y]
         else:
             assert len(self.goal_point) == 2, "Invalid goal point! Please provide a valid goal point."
             assert 0 + self.arena_threshold <= self.goal_point[0] <= self.arena_length - self.arena_threshold, f"Invalid goal point! x-coordinate out of bounds. Coordinate should be within {self.arena_threshold} and {self.arena_length - self.arena_threshold}."
@@ -283,8 +291,8 @@ class HerdingSimEnv(gym.Env):
         # generate random initial positions within the arena if not provided
         initial_positions = []
         for _ in range(self.num_sheep + self.num_sheepdogs):
-            x = np.random.uniform(0, self.arena_length)
-            y = np.random.uniform(0, self.arena_width)
+            x = np.random.uniform(self.arena_threshold, self.arena_length - self.arena_threshold)
+            y = np.random.uniform(self.arena_threshold, self.arena_width - self.arena_threshold)
             theta = np.random.uniform(-np.pi, np.pi)
             initial_positions.append([x, y, theta])
         self.robots = self.init_robots(initial_positions)
@@ -302,6 +310,7 @@ class HerdingSimEnv(gym.Env):
         info = {}
         obs = self.get_observations()
         obs = self.normalize_observation(obs)
+        obs = self.unpack_observation(obs)
 
         return obs, info 
 
