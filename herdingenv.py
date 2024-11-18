@@ -27,7 +27,7 @@ class TrainState(Enum):
 class HerdingSimEnv(gym.Env):
     def __init__(self, arena_length, arena_width, num_sheep, num_sheepdogs, 
                  robot_distance_between_wheels, robot_wheel_radius, max_wheel_velocity, 
-                 initial_positions=None, goal_point=None, action_mode="wheel"):
+                 initial_positions=None, goal_point=None, action_mode="wheel", attraction_factor=0.0):
         """
         Initialize the simulation environment.
 
@@ -41,6 +41,8 @@ class HerdingSimEnv(gym.Env):
             max_wheel_velocity (float): Maximum velocity of the wheels of the robots (meters/second)
             initial_positions (List[List[float]]): Initial positions of the robots in the simulation. [x, y, theta].
             goal_point (List[float]): Goal point for the sheep herd to reach [x, y]
+            action_mode (str): Action mode for the sheep-dogs. Options: "wheel" or "vector".
+            attraction_factor (float): Attraction factor for the sheep to move towards the goal point. Must be between 0 and 1.
 
         """
         super(HerdingSimEnv, self).__init__()
@@ -51,6 +53,7 @@ class HerdingSimEnv(gym.Env):
         self.distance_between_wheels = robot_distance_between_wheels
         self.wheel_radius = robot_wheel_radius
         self.max_wheel_velocity = max_wheel_velocity
+        self.attraction_factor = attraction_factor
 
         # Action and observation space
         # Action space is wheel velocities for sheep-dogs if action_mode is "wheel"
@@ -90,6 +93,7 @@ class HerdingSimEnv(gym.Env):
         self.p_a = 5.0 # relative strength of repulsion from other agents
         self.c = 0.2 # relative strength of attraction to the n nearest neighbours
         self.p_s = 1.0 # relative strength of repulsion from the sheep-dogs
+        self.a_f = 1.0 # relative strength of attraction to the goal point for the sheep
 
         # arena parameters
         self.point_dist = 0.1 # distance between the point that is controlled using the vector headings on the robot and the center of the robot
@@ -379,7 +383,7 @@ class HerdingSimEnv(gym.Env):
                 closest_neighbors.append((dist, j))
             closest_neighbors.sort()
 
-            # calculate the LCM (local center of mass) of the sheep withing the interaction distance
+            # calculate the LCM (local center of mass) of the sheep within the interaction distance
             sheep_within_r = 0
             for j in range(len(closest_neighbors)):
                 if closest_neighbors[j][0] < self.r_a:
@@ -418,6 +422,14 @@ class HerdingSimEnv(gym.Env):
                     vec_attraction = vec_attraction / np.linalg.norm(vec_attraction)
                     vec_desired = np.add(vec_desired, self.c*vec_attraction)
                     vec_desired = vec_desired / np.linalg.norm(vec_desired)
+
+            # as a training aid, add a vector pointing towards the goal point if the sheepdog is within detection distance
+            # this force is weighted by the attraction factor
+            if sheepdog_within_r > 0:
+                vec_goal = np.subtract(np.array(self.goal_point), np.array([x, y]))
+                vec_goal = vec_goal / np.linalg.norm(vec_goal)
+                vec_desired = np.add(vec_desired, self.attraction_factor*self.a_f*vec_goal)
+                vec_desired = vec_desired / np.linalg.norm(vec_desired)
 
             # use the diff drive motion model to calculate the wheel velocities
             if vec_desired[0] == 0.0 and vec_desired[1] == 0.0:
@@ -737,16 +749,16 @@ class HerdingSimEnv(gym.Env):
         
         # Give large reward for successful herding
         if terminated:
-            reward += 10000.0
+            reward += 50000.0
             return reward, terminated, truncated
             
         # Apply time penalty if truncated
         if truncated:
-            reward += -1.0
+            reward += -10.0
             return reward, terminated, truncated
 
         # add negative reward for each time step
-        reward += -1.0
+        reward += -10.0
 
         # Calculate score based on sheep distance from goal
         score = 0.0
