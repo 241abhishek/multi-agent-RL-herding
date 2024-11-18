@@ -41,7 +41,7 @@ class HerdingSimEnv(gym.Env):
             max_wheel_velocity (float): Maximum velocity of the wheels of the robots (meters/second)
             initial_positions (List[List[float]]): Initial positions of the robots in the simulation. [x, y, theta].
             goal_point (List[float]): Goal point for the sheep herd to reach [x, y]
-            action_mode (str): Action mode for the sheep-dogs. Options: "wheel" or "vector".
+            action_mode (str): Action mode for the sheep-dogs. Options: "wheel" or "vector" or "point".
             attraction_factor (float): Attraction factor for the sheep to move towards the goal point. Must be between 0 and 1.
 
         """
@@ -63,6 +63,10 @@ class HerdingSimEnv(gym.Env):
                                         shape=(num_sheepdogs * 2,), dtype=np.float32)
         # Action space is the desired vector for sheep-dogs if action_mode is "vector"
         elif action_mode == "vector":
+            self.action_space = spaces.Box(low=-1, high=1, 
+                                        shape=(num_sheepdogs * 2,), dtype=np.float32)
+        # Action space is the desired point for sheep-dogs if action_mode is "point"
+        elif action_mode == "point":
             self.action_space = spaces.Box(low=-1, high=1, 
                                         shape=(num_sheepdogs * 2,), dtype=np.float32)
         # Observation space is positions and orientations of all robots plus the goal point
@@ -184,6 +188,31 @@ class HerdingSimEnv(gym.Env):
                 y = np.clip(y, 0.0, self.arena_width)
                 self.robots[i].x = x
                 self.robots[i].y = y
+
+        elif self.action_mode == "point":
+            for i in range(self.num_sheepdogs):
+                # action[0] is the x-coordinate of the point
+                # action[1] is the y-coordinate of the point
+                # map the actions from -1 to 1 to between the arena dimensions
+                action[i * 2] = (action[i * 2] + 1) * self.arena_length / 2
+                action[i * 2 + 1] = (action[i * 2 + 1] + 1) * self.arena_width / 2
+                x, y, theta = self.robots[i].get_state()
+                # calculate the vector pointing towards the point
+                vec_desired = np.array([action[i * 2] - x, action[i * 2 + 1] - y])
+                vec_desired = vec_desired / np.linalg.norm(vec_desired)
+
+                # use the diff drive motion model to calculate the wheel velocities
+                wheel_velocities = self.diff_drive_motion_model(vec_desired, [x, y, theta], self.max_wheel_velocity)
+
+                # update the sheep-dog position based on the wheel velocities
+                self.robots[i].update_position(wheel_velocities[0], wheel_velocities[1])
+
+                # clip the sheep-dog position if updated position is outside the arena
+                x, y, _ = self.robots[i].get_state()
+                x = np.clip(x, 0.0, self.arena_length)
+                y = np.clip(y, 0.0, self.arena_width)
+                self.robots[i].x = x
+                self.robots[i].y = y 
 
         # Update sheep positions using predefined behavior 
         self.compute_sheep_actions()
@@ -454,9 +483,9 @@ class HerdingSimEnv(gym.Env):
         # Normalize the observations (both positions and orientations)
         
         for i in range(len(observation)):
-            # Normalize the position
-            observation[i][0] = observation[i][0] / self.arena_length
-            observation[i][1] = observation[i][1] / self.arena_width
+            # Normalize the position to between -1 and 1
+            observation[i][0] = 2 * (observation[i][0] / self.arena_length) - 1
+            observation[i][1] = 2 * (observation[i][1] / self.arena_width) - 1
             # Normalize the orientation (between -pi and pi to between -1 and 1)
             observation[i][2] = observation[i][2] / np.pi
             
