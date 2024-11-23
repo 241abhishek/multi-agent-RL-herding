@@ -70,8 +70,11 @@ class HerdingSimEnv(gym.Env):
             self.action_space = spaces.Box(low=-1, high=1, 
                                         shape=(num_sheepdogs * 2,), dtype=np.float32)
         # Observation space is positions and orientations of all robots plus the goal point
+        # self.observation_space = spaces.Box(low=-1, high=1, 
+                                            # shape=((num_sheep + num_sheepdogs)*3 + 2,), dtype=np.float32)
+
         self.observation_space = spaces.Box(low=-1, high=1, 
-                                            shape=((num_sheep + num_sheepdogs)*3 + 2,), dtype=np.float32)
+                                            shape=((num_sheep + num_sheepdogs)*2 + 2,), dtype=np.float32)
 
         # self.observation_space = spaces.Box(low=-1, high=1, 
                                             # shape=(num_sheep + num_sheepdogs + 1, 3), dtype=np.float32)
@@ -107,18 +110,38 @@ class HerdingSimEnv(gym.Env):
         # generate random initial positions within the arena if not provided
         if initial_positions is None:
             initial_positions = []
-            for _ in range(num_sheep + num_sheepdogs):
+            for i in range(num_sheepdogs):
+                if i == 0:
+                    x = 0.1
+                    y = 0.1
+                    theta = np.pi/4
+                elif i == 1:
+                    x = 14.9 
+                    y = 0.1
+                    theta = 3*np.pi/4
+                elif i == 2:
+                    x = 14.9 
+                    y = 14.9
+                    theta = -3*np.pi/4
+                initial_positions.append([x, y, theta])
+            for _ in range(num_sheep):
                 x = np.random.uniform(self.arena_threshold, self.arena_length - self.arena_threshold)
                 y = np.random.uniform(self.arena_threshold, self.arena_width - self.arena_threshold)
                 theta = np.random.uniform(-np.pi, np.pi)
                 initial_positions.append([x, y, theta])
-        # hold the information of all robots in self.robots
-        # the first num_sheepdogs robots are sheepdogs and the rest are sheep
-        self.robots = self.init_robots(initial_positions) 
+            # hold the information of all robots in self.robots
+            # the first num_sheepdogs robots are sheepdogs and the rest are sheep
+            self.robots = self.init_robots(initial_positions) 
+        else:
+            assert len(initial_positions) == num_sheep + num_sheepdogs, "Invalid initial positions! Please provide valid initial positions."
+            self.initial_positions = initial_positions
+            self.robots = self.init_robots(self.initial_positions)
 
         # set goal point parameters for the sheep herd
         self.goal_tolreance = 1.5 # accepatable tolerance for the sheep to be considered at the goal point 
         self.goal_point = goal_point
+        if self.goal_point: self.goal = True 
+        else: self.goal = False
         if self.goal_point is None:
             # self.goal_point = [self.arena_length / 2, self.arena_width / 2]
             # generate random goal point for the sheep herd
@@ -146,6 +169,8 @@ class HerdingSimEnv(gym.Env):
         if self.action_mode == "wheel": 
             assert len(action) == self.num_sheepdogs * 2, "Invalid action! Incorrect number of actions."
         elif self.action_mode == "vector":
+            assert len(action) == self.num_sheepdogs * 2, "Invalid action! Incorrect number of actions."
+        elif self.action_mode == "point":
             assert len(action) == self.num_sheepdogs * 2, "Invalid action! Incorrect number of actions."
 
         # Update sheep-dogs using RL agent actions
@@ -196,10 +221,16 @@ class HerdingSimEnv(gym.Env):
                 # map the actions from -1 to 1 to between the arena dimensions
                 action[i * 2] = (action[i * 2] + 1) * self.arena_length / 2
                 action[i * 2 + 1] = (action[i * 2 + 1] + 1) * self.arena_width / 2
+
+                # get robot state
                 x, y, theta = self.robots[i].get_state()
+
+                # calulate the position of the point that is controlled on the robot
+                x = x + self.point_dist * np.cos(theta)
+                y = y + self.point_dist * np.sin(theta)
+
                 # calculate the vector pointing towards the point
                 vec_desired = np.array([action[i * 2] - x, action[i * 2 + 1] - y])
-                vec_desired = vec_desired / np.linalg.norm(vec_desired)
 
                 # use the diff drive motion model to calculate the wheel velocities
                 wheel_velocities = self.diff_drive_motion_model(vec_desired, [x, y, theta], self.max_wheel_velocity)
@@ -221,9 +252,8 @@ class HerdingSimEnv(gym.Env):
         observations = self.get_observations()
         # normalize the observations
         observations = self.normalize_observation(observations)
-
         # unpack the observations
-        observations = self.unpack_observation(observations)
+        observations = self.unpack_observation(observations, remove_orientation=True)
 
         # Compute reward, terminated, and info
         reward, terminated, truncated = self.compute_reward_v6()
@@ -311,9 +341,10 @@ class HerdingSimEnv(gym.Env):
         super().reset(seed=seed)
         # Reset the environment
         # Generate random goal point for the sheep herd
-        goal_x = np.random.uniform(0 + self.arena_threshold, self.arena_length - self.arena_threshold)
-        goal_y = np.random.uniform(0 + self.arena_threshold, self.arena_width - self.arena_threshold)
-        self.goal_point = [goal_x, goal_y]
+        if self.goal is False:
+            goal_x = np.random.uniform(0 + self.arena_threshold, self.arena_length - self.arena_threshold)
+            goal_y = np.random.uniform(0 + self.arena_threshold, self.arena_width - self.arena_threshold)
+            self.goal_point = [goal_x, goal_y]
 
         # Generate initial positions for all robots based on the training state
         # robots=[[2.0, 2.0, np.pi/4], [5.0, 5.0, np.pi/4]]
@@ -322,13 +353,30 @@ class HerdingSimEnv(gym.Env):
         #     self.robots = self.init_robots(robots)
 
         # generate random initial positions within the arena if not provided
-        initial_positions = []
-        for _ in range(self.num_sheep + self.num_sheepdogs):
-            x = np.random.uniform(self.arena_threshold, self.arena_length - self.arena_threshold)
-            y = np.random.uniform(self.arena_threshold, self.arena_width - self.arena_threshold)
-            theta = np.random.uniform(-np.pi, np.pi)
-            initial_positions.append([x, y, theta])
-        self.robots = self.init_robots(initial_positions)
+        if self.initial_positions is None:
+            initial_positions = []
+            for i in range(self.num_sheepdogs):
+                if i == 0:
+                    x = 0.1
+                    y = 0.1
+                    theta = np.pi/4
+                elif i == 1:
+                    x = 14.9 
+                    y = 0.1
+                    theta = 3*np.pi/4
+                elif i == 2:
+                    x = 14.9 
+                    y = 14.9
+                    theta = -3*np.pi/4
+                initial_positions.append([x, y, theta])
+            for _ in range(self.num_sheep):
+                x = np.random.uniform(self.arena_threshold, self.arena_length - self.arena_threshold)
+                y = np.random.uniform(self.arena_threshold, self.arena_width - self.arena_threshold)
+                theta = np.random.uniform(-np.pi, np.pi)
+                initial_positions.append([x, y, theta])
+            self.robots = self.init_robots(initial_positions)
+        else:
+            self.robots = self.init_robots(self.initial_positions)
 
         # clear the frames
         # self.frames = []
@@ -343,7 +391,7 @@ class HerdingSimEnv(gym.Env):
         info = {}
         obs = self.get_observations()
         obs = self.normalize_observation(obs)
-        obs = self.unpack_observation(obs)
+        obs = self.unpack_observation(obs, remove_orientation=True)
 
         return obs, info 
 
@@ -491,13 +539,18 @@ class HerdingSimEnv(gym.Env):
             
         return observation
 
-    def unpack_observation(self, observation):
+    def unpack_observation(self, observation, remove_orientation=False):
         # unpack the observation sublists into one list
         obs = []
         for i in range(len(observation)):
             obs.extend(observation[i])
-        # remove last element from the list as it is a dummy orientation for the goal point
-        obs.pop()
+        if remove_orientation:
+            # remove every third element from the list as it is the orientation
+            obs = [val for idx, val in enumerate(obs) if (idx + 1) % 3 != 0]
+        else:
+            # pop the last element from the list as it is the orientation of the goal point
+            obs.pop()
+
         return np.array(obs, dtype=np.float32)
 
     def compute_reward_v1(self):
@@ -783,17 +836,20 @@ class HerdingSimEnv(gym.Env):
             
         # Apply time penalty if truncated
         if truncated:
-            reward += -10.0
+            reward += -5.0
             return reward, terminated, truncated
 
         # add negative reward for each time step
-        reward += -10.0
+        reward += -5.0
 
         # Calculate score based on sheep distance from goal
         score = 0.0
         for i in range(self.num_sheepdogs, len(self.robots)):
             x, y, _ = self.robots[i].get_state()
             dist = np.linalg.norm(np.array([x, y]) - np.array(self.goal_point))
+            # give positive reward if the sheep are within the goal region
+            if dist <= self.goal_tolreance:
+                reward += 500.0
             score += dist
 
         # Update minimum score achieved
@@ -834,7 +890,8 @@ class HerdingSimEnv(gym.Env):
         """
 
         # calculate the angle for the desired heading vector
-        vec_desired = vec_desired / np.linalg.norm(vec_desired) # normalize the vector
+        if vec_desired[0] or vec_desired[1]:
+            vec_desired = vec_desired / np.linalg.norm(vec_desired) # normalize the vector
         des_angle = np.arctan2(vec_desired[1], vec_desired[0])
 
         # calculate the angle difference
