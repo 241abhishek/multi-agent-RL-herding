@@ -89,7 +89,7 @@ class HerdingSimEnv(gym.Env):
 
         # set max number of steps for each episode
         self.curr_iter = 0
-        self.MAX_STEPS = 5000
+        self.MAX_STEPS = 25
 
         # simulation parameters
         # these are hardcoded parameters that define the behavior of the sheep
@@ -108,23 +108,10 @@ class HerdingSimEnv(gym.Env):
         self.arena_rep = 0.5 # repulsion force from the boundary
 
         # generate random initial positions within the arena if not provided
-        if initial_positions is None:
+        self.initial_positions = initial_positions
+        if self.initial_positions is None:
             initial_positions = []
-            for i in range(num_sheepdogs):
-                if i == 0:
-                    x = 0.1
-                    y = 0.1
-                    theta = np.pi/4
-                elif i == 1:
-                    x = 14.9 
-                    y = 0.1
-                    theta = 3*np.pi/4
-                elif i == 2:
-                    x = 14.9 
-                    y = 14.9
-                    theta = -3*np.pi/4
-                initial_positions.append([x, y, theta])
-            for _ in range(num_sheep):
+            for _ in range(num_sheepdogs + num_sheep):
                 x = np.random.uniform(self.arena_threshold, self.arena_length - self.arena_threshold)
                 y = np.random.uniform(self.arena_threshold, self.arena_width - self.arena_threshold)
                 theta = np.random.uniform(-np.pi, np.pi)
@@ -134,7 +121,6 @@ class HerdingSimEnv(gym.Env):
             self.robots = self.init_robots(initial_positions) 
         else:
             assert len(initial_positions) == num_sheep + num_sheepdogs, "Invalid initial positions! Please provide valid initial positions."
-            self.initial_positions = initial_positions
             self.robots = self.init_robots(self.initial_positions)
 
         # set goal point parameters for the sheep herd
@@ -157,6 +143,7 @@ class HerdingSimEnv(gym.Env):
         self.prev_sheep_position = None
         self.min_score = float('inf')
         self.reward_scaling_factor = 1.0
+        self.gcm = None
 
     def init_robots(self, initial_positions):
         robots = []
@@ -248,16 +235,16 @@ class HerdingSimEnv(gym.Env):
         # Update sheep positions using predefined behavior 
         self.compute_sheep_actions()
 
+        # Compute reward, terminated, and info
+        reward, terminated, truncated = self.compute_reward_v7()
+        info = {}
+
         # Gather new observations (positions, orientations)
         observations = self.get_observations()
         # normalize the observations
         observations = self.normalize_observation(observations)
         # unpack the observations
         observations = self.unpack_observation(observations, remove_orientation=True)
-
-        # Compute reward, terminated, and info
-        reward, terminated, truncated = self.compute_reward_v6()
-        info = {}
 
         return observations, reward, terminated, truncated, info
 
@@ -323,6 +310,14 @@ class HerdingSimEnv(gym.Env):
                          robot_y_px - arrow_length * np.sin(robot_theta))
             pygame.draw.line(self.screen, (255, 255, 255), (robot_x_px, robot_y_px), arrow_end, 2)
 
+        # Draw the gcm of the sheep herd if not none
+        if self.gcm is not None:
+            gcm_x, gcm_y = self.gcm
+            gcm_x_px = int(gcm_x * self.scale_factor)
+            gcm_y_px = self.arena_width_px - int(gcm_y * self.scale_factor)
+
+            pygame.draw.circle(self.screen, (255, 255, 0), (gcm_x_px, gcm_y_px), 5)
+
         # Update the display for "human" mode
         if mode == "human":
             pygame.display.flip()
@@ -346,30 +341,10 @@ class HerdingSimEnv(gym.Env):
             goal_y = np.random.uniform(0 + self.arena_threshold, self.arena_width - self.arena_threshold)
             self.goal_point = [goal_x, goal_y]
 
-        # Generate initial positions for all robots based on the training state
-        # robots=[[2.0, 2.0, np.pi/4], [5.0, 5.0, np.pi/4]]
-        # robots = None
-        # if robots is not None:
-        #     self.robots = self.init_robots(robots)
-
         # generate random initial positions within the arena if not provided
         if self.initial_positions is None:
             initial_positions = []
-            for i in range(self.num_sheepdogs):
-                if i == 0:
-                    x = 0.1
-                    y = 0.1
-                    theta = np.pi/4
-                elif i == 1:
-                    x = 14.9 
-                    y = 0.1
-                    theta = 3*np.pi/4
-                elif i == 2:
-                    x = 14.9 
-                    y = 14.9
-                    theta = -3*np.pi/4
-                initial_positions.append([x, y, theta])
-            for _ in range(self.num_sheep):
+            for _ in range(self.num_sheepdogs + self.num_sheep):
                 x = np.random.uniform(self.arena_threshold, self.arena_length - self.arena_threshold)
                 y = np.random.uniform(self.arena_threshold, self.arena_width - self.arena_threshold)
                 theta = np.random.uniform(-np.pi, np.pi)
@@ -377,9 +352,6 @@ class HerdingSimEnv(gym.Env):
             self.robots = self.init_robots(initial_positions)
         else:
             self.robots = self.init_robots(self.initial_positions)
-
-        # clear the frames
-        # self.frames = []
 
         # reset the min score
         self.min_score = float('inf')
@@ -524,6 +496,10 @@ class HerdingSimEnv(gym.Env):
             obs.append(robot.get_state())
         # append the goal point to the observations
         goal = np.array(self.goal_point + [0.0]) # add a dummy orientation
+        if self.gcm is not None:
+            goal = np.array(self.gcm + [0.0]) # set the gcm as the goal point when using compute_reward_v7
+        else:
+            goal = np.array(self.goal_point + [0.0])
         obs.append(goal)
         return np.array(obs)
 
@@ -856,8 +832,62 @@ class HerdingSimEnv(gym.Env):
         if score < self.min_score:
             reward += 50.0
             self.min_score = score
+        else:
+            reward -= 25.0
 
         return reward, terminated, truncated
+
+    def compute_reward_v7(self):
+        """
+        Compute the reward based on the spread of the sheep from the gcm of the sheep herd.
+        """
+
+        reward = 0.0
+
+        truncated = self.check_truncated()
+
+        # apply time penalty if truncated
+        if truncated:
+            reward += -5.0
+            return reward, False, truncated
+
+        # add a negative reward for each time step
+        reward += -5.0
+
+        # calculate the Global Center of Mass (GCM) of the sheep herd
+        sheep_gcm = np.array([0.0, 0.0])
+        for i in range(self.num_sheepdogs, len(self.robots)):
+            x, y, _ = self.robots[i].get_state()
+            sheep_gcm = np.add(sheep_gcm, np.array([x, y]))
+        sheep_gcm = sheep_gcm / self.num_sheep
+        self.gcm = [sheep_gcm[0], sheep_gcm[1]]
+
+        # calculate score based on the spread of the sheep from the GCM
+        score = 0.0
+        num_sheep_within_tol = 0
+        for i in range(self.num_sheepdogs, len(self.robots)):
+            x, y, _ = self.robots[i].get_state()
+            dist = np.linalg.norm(np.array([x, y]) - sheep_gcm)
+            if dist <= self.goal_tolreance:
+                num_sheep_within_tol += 1
+                reward += 500.0
+            score += dist
+
+        # update the minimum score achieved
+        if score < self.min_score:
+            reward += 50.0
+            self.min_score = score
+        else:
+            reward -= 25.0
+
+        if num_sheep_within_tol == self.num_sheep:
+            reward += 50000.0
+            terminated = True
+        else:
+            terminated = False
+
+        return reward, terminated, truncated
+
 
     def check_terminated(self):
         # check if the sheep herd has reached the goal point
