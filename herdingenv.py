@@ -41,7 +41,7 @@ class HerdingSimEnv(gym.Env):
             max_wheel_velocity (float): Maximum velocity of the wheels of the robots (meters/second)
             initial_positions (List[List[float]]): Initial positions of the robots in the simulation. [x, y, theta].
             goal_point (List[float]): Goal point for the sheep herd to reach [x, y]
-            action_mode (str): Action mode for the sheep-dogs. Options: "wheel" or "vector" or "point".
+            action_mode (str): Action mode for the sheep-dogs. Options: "wheel" or "vector" or "point" or "multi".
             attraction_factor (float): Attraction factor for the sheep to move towards the goal point. Must be between 0 and 1.
 
         """
@@ -69,12 +69,26 @@ class HerdingSimEnv(gym.Env):
         elif action_mode == "point":
             self.action_space = spaces.Box(low=-1, high=1, 
                                         shape=(num_sheepdogs * 2,), dtype=np.float32)
+        # Action space is the desired point for individual sheep-dogs if action_mode is "multi"
+        # This mode uses a single sheep and a single sheep-dog trained model with multiple sheep-dogs and sheep
+        # At present the env is configured to use the point model for controlling the individual sheep-dogs
+        elif action_mode == "multi":
+            self.action_space = spaces.Box(low=-1, high=1, 
+                                        shape=(1 * 2,), dtype=np.float32)
+        
         # Observation space is positions and orientations of all robots plus the goal point
-        # self.observation_space = spaces.Box(low=-1, high=1, 
-                                            # shape=((num_sheep + num_sheepdogs)*3 + 2,), dtype=np.float32)
-
-        self.observation_space = spaces.Box(low=-1, high=1, 
-                                            shape=((num_sheep + num_sheepdogs)*2 + 2,), dtype=np.float32)
+        if self.action_mode == "wheel" or self.action_mode == "vector":
+            self.observation_space = spaces.Box(low=-1, high=1, 
+                                                shape=((num_sheep + num_sheepdogs)*3 + 2,), dtype=np.float32)
+        elif self.action_mode == "point":
+            self.observation_space = spaces.Box(low=-1, high=1, 
+                                                shape=((num_sheep + num_sheepdogs)*2 + 2,), dtype=np.float32)
+        elif self.action_mode == "multi":
+            # when action mode is multi, the env is configured as a single-dog, single-sheep env
+            self.observation_space = spaces.Box(low=-1, high=1, 
+                                                shape=((1 + 1)*2 + 2,), dtype=np.float32)
+            self.action_count = 0 # counter to keep track of the number of sheep-dogs that have taken their actions
+            self.farthest_sheep = None # a list to keep track of the sheep farthest from the goal point 
 
         # self.observation_space = spaces.Box(low=-1, high=1, 
                                             # shape=(num_sheep + num_sheepdogs + 1, 3), dtype=np.float32)
@@ -89,7 +103,7 @@ class HerdingSimEnv(gym.Env):
 
         # set max number of steps for each episode
         self.curr_iter = 0
-        self.MAX_STEPS = 25
+        self.MAX_STEPS = 2500
 
         # simulation parameters
         # these are hardcoded parameters that define the behavior of the sheep
@@ -139,6 +153,19 @@ class HerdingSimEnv(gym.Env):
             assert 0 + self.arena_threshold <= self.goal_point[0] <= self.arena_length - self.arena_threshold, f"Invalid goal point! x-coordinate out of bounds. Coordinate should be within {self.arena_threshold} and {self.arena_length - self.arena_threshold}."
             assert 0 + self.arena_threshold <= self.goal_point[1] <= self.arena_width - self.arena_threshold, f"Invalid goal point! y-coordinate out of bounds. Coordinate should be within {self.arena_threshold} and {self.arena_width - self.arena_threshold}."
 
+        # if using multi action mode, initialize the farthest sheep list
+        if self.action_mode == "multi":
+            # the farthest sheep list contains the index of the sheep farthest from the goal point in self.robots
+            # sort the sheep based on the distance from the goal point
+            self.farthest_sheep = []
+            for i in range(num_sheepdogs, len(self.robots)):
+                x, y, _ = self.robots[i].get_state()
+                dist = np.linalg.norm(np.array([x, y]) - np.array(self.goal_point))
+                self.farthest_sheep.append((dist, i))
+            self.farthest_sheep.sort(reverse=True)
+            # remove the distance information from the list
+            self.farthest_sheep = [i for _, i in self.farthest_sheep]
+
         self.prev_sheepdog_position = None
         self.prev_sheep_position = None
         self.min_score = float('inf')
@@ -151,14 +178,24 @@ class HerdingSimEnv(gym.Env):
             robots.append(DifferentialDriveRobot(pos, self.distance_between_wheels, self.wheel_radius))
         return robots
 
-    def step(self, action):
+    def step(self, action, robot_id = None):
+        """
+        Step the simulation environment forward by one time step.
+
+        Args:
+            action (List[float]): Action taken by the agent.
+            robot_id (int): ID of the robot to take the action. If None, all robots take the action. Used in multi-agent environments.
+
+        Returns:
+            Tuple[np.ndarray, float, bool, bool, Dict]: Observation, reward, terminated, truncated, info
+
+        """
         # check if the action is valid
-        if self.action_mode == "wheel": 
+        if not self.action_mode == "multi":
             assert len(action) == self.num_sheepdogs * 2, "Invalid action! Incorrect number of actions."
-        elif self.action_mode == "vector":
-            assert len(action) == self.num_sheepdogs * 2, "Invalid action! Incorrect number of actions."
-        elif self.action_mode == "point":
-            assert len(action) == self.num_sheepdogs * 2, "Invalid action! Incorrect number of actions."
+        else:
+            assert len(action) == 2, "Invalid action! Incorrect number of actions."
+            assert robot_id is not None, "Invalid robot ID! Please provide a valid robot ID."
 
         # Update sheep-dogs using RL agent actions
         if self.action_mode == "wheel":
@@ -232,21 +269,78 @@ class HerdingSimEnv(gym.Env):
                 self.robots[i].x = x
                 self.robots[i].y = y 
 
-        # Update sheep positions using predefined behavior 
-        self.compute_sheep_actions()
+        elif self.action_mode == "multi":
+            assert robot_id is not None, "Invalid robot ID! Please provide a valid robot ID."
 
-        # Compute reward, terminated, and info
-        reward, terminated, truncated = self.compute_reward_v7()
-        info = {}
+            # action[0] is the x-coordinate of the point
+            # action[1] is the y-coordinate of the point
+            # map the actions from -1 to 1 to between the arena dimensions
+            action[0] = (action[0] + 1) * self.arena_length / 2
+            action[1] = (action[1] + 1) * self.arena_width / 2
+
+            # get robot state
+            x, y, theta = self.robots[robot_id].get_state()
+
+            # calulate the position of the point that is controlled on the robot
+            x = x + self.point_dist * np.cos(theta)
+            y = y + self.point_dist * np.sin(theta)
+
+            # calculate the vector pointing towards the point
+            vec_desired = np.array([action[0] - x, action[1] - y])
+
+            # use the diff drive motion model to calculate the wheel velocities
+            wheel_velocities = self.diff_drive_motion_model(vec_desired, [x, y, theta], self.max_wheel_velocity)
+
+            # update the sheep-dog position based on the wheel velocities
+            self.robots[robot_id].update_position(wheel_velocities[0], wheel_velocities[1])
+
+            # clip the sheep-dog position if updated position is outside the arena
+            x, y, _ = self.robots[robot_id].get_state()
+            x = np.clip(x, 0.0, self.arena_length)
+            y = np.clip(y, 0.0, self.arena_width)
+            self.robots[robot_id].x = x
+            self.robots[robot_id].y = y
 
         # Gather new observations (positions, orientations)
-        observations = self.get_observations()
-        # normalize the observations
-        observations = self.normalize_observation(observations)
-        # unpack the observations
-        observations = self.unpack_observation(observations, remove_orientation=True)
+        if not self.action_mode == "multi":
+            observations = self.get_observations()
+            # normalize the observations
+            observations = self.normalize_observation(observations)
+            # unpack the observations
+            observations = self.unpack_observation(observations, remove_orientation=True)
 
-        return observations, reward, terminated, truncated, info
+        else:
+            observations = self.get_multi_observations(robot_id)
+            # normalize the observations
+            observations = self.normalize_observation(observations)
+            # unpack the observations
+            observations = self.unpack_observation(observations, remove_orientation=True)
+
+        # Update sheep positions using predefined behavior 
+        if self.action_mode == "multi":
+            info = {}
+            # initialize the reward, terminated, and truncated variables if not already initialized
+            if not hasattr(self, 'reward'):
+                self.reward = 0
+            if not hasattr(self, 'terminated'):
+                self.terminated = False
+            if not hasattr(self, 'truncated'):
+                self.truncated = False
+            # update the sheep position only after all the sheep-dogs have taken their actions
+            if self.action_count == self.num_sheepdogs - 1:
+                self.compute_sheep_actions()
+                # compute reward, terminated, and info
+                self.reward, self.terminated, self.truncated = self.compute_reward_v6()
+                self.action_count = 0
+            else:
+                self.action_count += 1
+        else:
+            self.compute_sheep_actions()
+            # Compute reward, terminated, and info
+            self.reward, self.terminated, self.truncated = self.compute_reward_v6()
+            info = {}
+
+        return observations, self.reward, self.terminated, self.truncated, info
 
     def render(self, mode=None, fps=1):
         # Initialize pygame if it hasn't been already
@@ -332,40 +426,90 @@ class HerdingSimEnv(gym.Env):
         frame = np.moveaxis(frame, -1, 0)
         self.frames.append(frame)  # Convert Pygame surface to numpy array
 
-    def reset(self, seed=None, options=None):
+    def reset(self, seed=None, options=None, robot_id = None):
         super().reset(seed=seed)
+        if self.action_mode == "multi":
+            assert robot_id is not None, "Invalid robot ID! Please provide a valid robot ID."
         # Reset the environment
-        # Generate random goal point for the sheep herd
-        if self.goal is False:
-            goal_x = np.random.uniform(0 + self.arena_threshold, self.arena_length - self.arena_threshold)
-            goal_y = np.random.uniform(0 + self.arena_threshold, self.arena_width - self.arena_threshold)
-            self.goal_point = [goal_x, goal_y]
+        if self.action_mode != "multi":
+            # Generate random goal point for the sheep herd
+            if self.goal is False:
+                goal_x = np.random.uniform(0 + self.arena_threshold, self.arena_length - self.arena_threshold)
+                goal_y = np.random.uniform(0 + self.arena_threshold, self.arena_width - self.arena_threshold)
+                self.goal_point = [goal_x, goal_y]
 
-        # generate random initial positions within the arena if not provided
-        if self.initial_positions is None:
-            initial_positions = []
-            for _ in range(self.num_sheepdogs + self.num_sheep):
-                x = np.random.uniform(self.arena_threshold, self.arena_length - self.arena_threshold)
-                y = np.random.uniform(self.arena_threshold, self.arena_width - self.arena_threshold)
-                theta = np.random.uniform(-np.pi, np.pi)
-                initial_positions.append([x, y, theta])
-            self.robots = self.init_robots(initial_positions)
+            # generate random initial positions within the arena if not provided
+            if self.initial_positions is None:
+                initial_positions = []
+                for _ in range(self.num_sheepdogs + self.num_sheep):
+                    x = np.random.uniform(self.arena_threshold, self.arena_length - self.arena_threshold)
+                    y = np.random.uniform(self.arena_threshold, self.arena_width - self.arena_threshold)
+                    theta = np.random.uniform(-np.pi, np.pi)
+                    initial_positions.append([x, y, theta])
+                self.robots = self.init_robots(initial_positions)
+            else:
+                self.robots = self.init_robots(self.initial_positions)
+
+            # reset the min score
+            self.min_score = float('inf')
+
+            # reset the step counter
+            self.curr_iter = 0
+
+            info = {}
+            obs = self.get_observations()
+            obs = self.normalize_observation(obs)
+            obs = self.unpack_observation(obs, remove_orientation=True)
+
+            return obs, info 
+
         else:
-            self.robots = self.init_robots(self.initial_positions)
+            if robot_id == 0: # only reset the environment for the first sheep-dog, for the rest of the sheep-dogs, return the observation
+                # Generate random goal point for the sheep herd
+                if self.goal is False:
+                    goal_x = np.random.uniform(0 + self.arena_threshold, self.arena_length - self.arena_threshold)
+                    goal_y = np.random.uniform(0 + self.arena_threshold, self.arena_width - self.arena_threshold)
+                    self.goal_point = [goal_x, goal_y]
 
-        # reset the min score
-        self.min_score = float('inf')
+                # generate random initial positions within the arena if not provided
+                if self.initial_positions is None:
+                    initial_positions = []
+                    for _ in range(self.num_sheepdogs + self.num_sheep):
+                        x = np.random.uniform(self.arena_threshold, self.arena_length - self.arena_threshold)
+                        y = np.random.uniform(self.arena_threshold, self.arena_width - self.arena_threshold)
+                        theta = np.random.uniform(-np.pi, np.pi)
+                        initial_positions.append([x, y, theta])
+                    self.robots = self.init_robots(initial_positions)
+                else:
+                    self.robots = self.init_robots(self.initial_positions)
 
-        # reset the step counter
-        self.curr_iter = 0
+                # update the farthest sheep list
+                self.farthest_sheep = []
+                for i in range(self.num_sheepdogs, len(self.robots)):
+                    x, y, _ = self.robots[i].get_state()
+                    dist = np.linalg.norm(np.array([x, y]) - np.array(self.goal_point))
+                    self.farthest_sheep.append((dist, i))
+                self.farthest_sheep.sort(reverse=True)
+                # remove the distance information from the list
+                self.farthest_sheep = [i for _, i in self.farthest_sheep]
 
-        # Return the initial observation and empty info
-        info = {}
-        obs = self.get_observations()
-        obs = self.normalize_observation(obs)
-        obs = self.unpack_observation(obs, remove_orientation=True)
+                self.farthest_sheep_copy = self.farthest_sheep.copy() # make a copy of the farthest sheep list
 
-        return obs, info 
+                # reset the min score
+                self.min_score = float('inf')
+
+                # reset the step counter
+                self.curr_iter = 0
+
+            info = {}
+            obs = self.get_multi_observations(robot_id)
+            obs = self.normalize_observation(obs)
+            obs = self.unpack_observation(obs, remove_orientation=True)
+
+            if robot_id == self.num_sheepdogs - 1:
+                self.farthest_sheep = self.farthest_sheep_copy.copy() # reset the farthest sheep list once all the sheep-dogs have made the reset call 
+
+            return obs, info
 
     def get_video_frames(self):
         frames = np.array(self.frames)
@@ -489,6 +633,18 @@ class HerdingSimEnv(gym.Env):
             # update the sheep position based on the wheel velocities
             self.robots[i].update_position(wheel_velocities[0], wheel_velocities[1])
 
+        if self.action_mode == "multi":
+            # update the farthest sheep list
+            # sort the sheep based on the distance from the goal point
+            self.farthest_sheep = []
+            for i in range(self.num_sheepdogs, len(self.robots)):
+                x, y, _ = self.robots[i].get_state()
+                dist = np.linalg.norm(np.array([x, y]) - np.array(self.goal_point))
+                self.farthest_sheep.append((dist, i))
+            self.farthest_sheep.sort(reverse=True)
+            # remove the distance information from the list
+            self.farthest_sheep = [i for _, i in self.farthest_sheep]
+
     def get_observations(self):
         # Return positions and orientations of all robots with the goal point
         obs = []
@@ -501,7 +657,74 @@ class HerdingSimEnv(gym.Env):
         else:
             goal = np.array(self.goal_point + [0.0])
         obs.append(goal)
+        # pop the last element from the list as it is the orientation of the goal point
+        # obs.pop()
         return np.array(obs)
+
+    def get_multi_observations(self, robot_id):
+        # Return positions and orientations of the sheep and the sheep-dog with robot_id and the goal point
+        obs = []
+        obs.append(self.robots[robot_id].get_state()) # add the appropriate sheep-dog state 
+        obs.append(self.get_obs_for_sheep_v2(robot_id)) # add the appropriate sheep state
+        # append the goal point to the observations
+        goal = np.array(self.goal_point + [0.0]) # add a dummy orientation
+
+        if self.gcm is not None:
+            goal = np.array(self.gcm + [0.0]) # set the gcm as the goal point when using compute_reward_v7
+        else:
+            goal = np.array(self.goal_point + [0.0])
+        obs.append(goal)
+
+        return np.array(obs)
+    
+    def get_obs_for_sheep(self, robot_id):
+        """
+        This function is used to define the logic for which sheep the sheep-dog with robot_id should observe.
+
+        The sheep-dog with robot_id will observe the sheep that is the robot_id sheep away from the goal.
+        Ex: sheep-dog with id 0 will observe the sheep farghest from the goal point, sheep-dog with id 1
+        will observe the second farthest sheep from the goal point and so on. 
+
+        Args:
+            robot_id (int): ID of the sheep-dog to determine the sheep to observe.
+
+        Returns:
+            np.ndarray: Observation of the sheep that the sheep-dog with robot_id should observe.
+        """
+
+        # get the index of the sheep to observe
+        sheep_id = self.farthest_sheep[robot_id]
+        return self.robots[sheep_id].get_state()
+
+    def get_obs_for_sheep_v2(self, robot_id):
+        """
+        This function is used to define the logic for which sheep the sheep-dog with robot_id should observe.
+
+        The sheep-dog with robot_id will observe the sheep that is farthest from goal but closest to it.
+
+        Args:
+            robot_id (int): ID of the sheep-dog to determine the sheep to observe.
+
+        Returns:
+            np.ndarray: Observation of the sheep that the sheep-dog with robot_id should observe.
+        """
+
+        # from the first num_sheepdog sheep, find the sheep that is closest to the sheep-dog with robot_id
+        # this is the sheep that the sheep-dog with robot_id should observe
+        # remove this sheep from the farthest sheep list so that it is not observed by other sheep-dogs
+        # this avoids multiple sheep-dogs observing the same sheep
+        min_dist_id = 0
+        min_dist = float('inf')
+        for i in range(self.num_sheepdogs - robot_id):
+            dist = np.linalg.norm(np.array(self.robots[robot_id].get_state()[:2]) - np.array(self.robots[self.farthest_sheep[i]].get_state()[:2]))
+            if dist < min_dist:
+                min_dist = dist
+                min_dist_id = i
+
+        sheep_id = self.farthest_sheep.pop(min_dist_id)
+        # sheep_id = self.farthest_sheep[min_dist_id]
+
+        return self.robots[sheep_id].get_state()
 
     def normalize_observation(self, observation):
         # Normalize the observations (both positions and orientations)
@@ -510,6 +733,8 @@ class HerdingSimEnv(gym.Env):
             # Normalize the position to between -1 and 1
             observation[i][0] = 2 * (observation[i][0] / self.arena_length) - 1
             observation[i][1] = 2 * (observation[i][1] / self.arena_width) - 1
+            # observation[i][0] = observation[i][0] / self.arena_length
+            # observation[i][1] = observation[i][1] / self.arena_width
             # Normalize the orientation (between -pi and pi to between -1 and 1)
             observation[i][2] = observation[i][2] / np.pi
             
