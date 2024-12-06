@@ -138,7 +138,7 @@ class HerdingSimEnv(gym.Env):
             self.robots = self.init_robots(self.initial_positions)
 
         # set goal point parameters for the sheep herd
-        self.goal_tolreance = 1.5 # accepatable tolerance for the sheep to be considered at the goal point 
+        self.goal_tolreance = 2.5 # accepatable tolerance for the sheep to be considered at the goal point 
         self.goal_point = goal_point
         if self.goal_point: self.goal = True 
         else: self.goal = False
@@ -171,6 +171,8 @@ class HerdingSimEnv(gym.Env):
         self.min_score = float('inf')
         self.reward_scaling_factor = 1.0
         self.gcm = None
+
+        self.targeted = None # a list to keep track of sheep targeted by the sheep-dogs for herding in multi action mode
 
     def init_robots(self, initial_positions):
         robots = []
@@ -371,6 +373,11 @@ class HerdingSimEnv(gym.Env):
         for i, robot in enumerate(self.robots):
             if i < self.num_sheepdogs:
                 color = (0, 0, 255)  # Blue for Sheep-dogs
+            elif self.targeted:
+                if i in self.targeted:
+                    color = (255, 0, 0) # Red for targeted sheep
+                else:
+                    color = (0, 255, 0)  # Green for Sheep
             else:
                 color = (0, 255, 0)  # Green for Sheep
 
@@ -425,6 +432,10 @@ class HerdingSimEnv(gym.Env):
         # reorder the axes to match the expected format (channel, height, width)
         frame = np.moveaxis(frame, -1, 0)
         self.frames.append(frame)  # Convert Pygame surface to numpy array
+
+        if self.action_mode == "multi":
+            if self.targeted is not None:
+                self.targeted = None
 
     def reset(self, seed=None, options=None, robot_id = None):
         super().reset(seed=seed)
@@ -593,7 +604,7 @@ class HerdingSimEnv(gym.Env):
                 vec_repulsion = vec_repulsion / np.linalg.norm(vec_repulsion) # normalize the vector
                 # add the repulsion vector to the desired heading vector
                 vec_desired = np.add(vec_desired, self.p_a*vec_repulsion)
-                vec_desired = vec_desired / np.linalg.norm(vec_desired) # normalize the vector
+                # vec_desired = vec_desired / np.linalg.norm(vec_desired) # normalize the vector
 
             # calculate the vector pointing away from the sheep-dogs
             sheepdog_within_r = 0
@@ -605,7 +616,7 @@ class HerdingSimEnv(gym.Env):
                     vec_repulsion = np.subtract(np.array([x, y]), np.array([x_j, y_j]))
                     vec_repulsion = vec_repulsion / np.linalg.norm(vec_repulsion)
                     vec_desired = np.add(vec_desired, self.p_s*vec_repulsion)
-                    vec_desired = vec_desired / np.linalg.norm(vec_desired) # normalize the vector
+                    # vec_desired = vec_desired / np.linalg.norm(vec_desired) # normalize the vector
 
             # calculate the vector pointing towards the n nearest neighbors
             if sheepdog_within_r > 0:
@@ -614,7 +625,7 @@ class HerdingSimEnv(gym.Env):
                     vec_attraction = np.subtract(np.array([x_j, y_j]), np.array([x, y]))
                     vec_attraction = vec_attraction / np.linalg.norm(vec_attraction)
                     vec_desired = np.add(vec_desired, self.c*vec_attraction)
-                    vec_desired = vec_desired / np.linalg.norm(vec_desired)
+                    # vec_desired = vec_desired / np.linalg.norm(vec_desired)
 
             # as a training aid, add a vector pointing towards the goal point if the sheepdog is within detection distance
             # this force is weighted by the attraction factor
@@ -622,6 +633,10 @@ class HerdingSimEnv(gym.Env):
                 vec_goal = np.subtract(np.array(self.goal_point), np.array([x, y]))
                 vec_goal = vec_goal / np.linalg.norm(vec_goal)
                 vec_desired = np.add(vec_desired, self.attraction_factor*self.a_f*vec_goal)
+                # vec_desired = vec_desired / np.linalg.norm(vec_desired)
+
+            # normalize the desired vector if it is not the zero vector
+            if vec_desired[0] != 0.0 and vec_desired[1] != 0.0:
                 vec_desired = vec_desired / np.linalg.norm(vec_desired)
 
             # use the diff drive motion model to calculate the wheel velocities
@@ -694,6 +709,11 @@ class HerdingSimEnv(gym.Env):
 
         # get the index of the sheep to observe
         sheep_id = self.farthest_sheep[robot_id]
+        # add sheep_id to the targeted list
+        if self.targeted is not None:
+            self.targeted.append(sheep_id)
+        else:
+            self.targeted = [sheep_id]
         return self.robots[sheep_id].get_state()
 
     def get_obs_for_sheep_v2(self, robot_id):
@@ -723,6 +743,12 @@ class HerdingSimEnv(gym.Env):
 
         sheep_id = self.farthest_sheep.pop(min_dist_id)
         # sheep_id = self.farthest_sheep[min_dist_id]
+
+        # add sheep_id to the targeted list
+        if self.targeted is not None:
+            self.targeted.append(sheep_id)
+        else:
+            self.targeted = [sheep_id]
 
         return self.robots[sheep_id].get_state()
 
