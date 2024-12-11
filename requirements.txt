@@ -1,0 +1,6 @@
+stable-baselines3[extra]
+wandb
+imageio
+numpy
+imageio[ffmpeg]
+wandb[media]
