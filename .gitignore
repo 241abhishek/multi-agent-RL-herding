@@ -3,6 +3,7 @@
 /models
 /wandb
 /eval_models
+/videos
 
 *.vscode
 *__pycache__
