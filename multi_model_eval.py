@@ -1,7 +1,4 @@
-"""
-A simple script to evaluate the performance of a trained rl model.
-"""
-
+import argparse
 import numpy as np
 import torch
 from stable_baselines3 import PPO, SAC
@@ -10,36 +7,52 @@ from herdingenv import HerdingSimEnv
 import tqdm
 import time
 
-NUM_SHEEP = 10
-NUM_SHEEPDOGS = 4
-
-# custom function to create environment instances
-def make_env():
+def make_env(arena_length, arena_width, num_sheep, num_shepherds, robot_distance_between_wheels, robot_wheel_radius, max_wheel_velocity):
     def _init():
-        # Simulation initialization data
-        arena_length = 15  # meters
-        arena_width = 15   # meters
-        num_sheep = NUM_SHEEP
-        num_sheepdogs = NUM_SHEEPDOGS
-        robot_wheel_radius = 0.1  # meters
-        robot_distance_between_wheels = 0.2  # meters
-        max_wheel_velocity = 10.0  # m/s
-
-        # Create the environment
-        env = HerdingSimEnv(arena_length, arena_width, num_sheep, num_sheepdogs, robot_distance_between_wheels, robot_wheel_radius, max_wheel_velocity, action_mode="multi", attraction_factor=0.0)
-
+        env = HerdingSimEnv(
+            arena_length=arena_length,
+            arena_width=arena_width,
+            num_sheep=num_sheep,
+            num_sheepdogs=num_shepherds,
+            robot_distance_between_wheels=robot_distance_between_wheels,
+            robot_wheel_radius=robot_wheel_radius,
+            max_wheel_velocity=max_wheel_velocity,
+            action_mode="multi",
+            attraction_factor=0.0
+        )
         return env
     return _init
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="Evaluate a trained RL model for the herding task.")
+    parser.add_argument("--num_sheep", type=int, default=1, help="Number of sheep in the simulation.")
+    parser.add_argument("--num_shepherds", type=int, default=1, help="Number of shepherds in the simulation.")
+    parser.add_argument("--model_path", type=str, required=True, help="Path to the trained RL model.")
+    parser.add_argument("--save_video", type=str, default="False", help="Save videos of simulations (True/False).")
+    parser.add_argument("--num_sims", type=int, default=10, help="Number of simulations to run.")
+    parser.add_argument("--render_mode", type=str, default="human", choices=["human", "offscreen"], help="Render mode for the environment.")
+    return parser.parse_args()
+
 if __name__ == "__main__":
-    num_sims = 100
-    env = make_env()()
+    args = parse_args()
+    # Convert save_video to boolean
+    save_video = args.save_video.lower() == "true" 
+
+    # Environment parameters
+    arena_length = 15
+    arena_width = 15
+    robot_wheel_radius = 0.1
+    robot_distance_between_wheels = 0.2
+    max_wheel_velocity = 10.0
+
+    env = make_env(
+        arena_length, arena_width, args.num_sheep, args.num_shepherds, robot_distance_between_wheels, robot_wheel_radius, max_wheel_velocity
+    )()
 
     # Load model
-    model_path = "/home/abhi2001/MSR/final_project/rl/eval_models/herding_multi_PPO-20241118-163030/model.zip"
     models = {}
-    for i in range(NUM_SHEEPDOGS):
-        models[i] = PPO.load(model_path, env=env)
+    for i in range(args.num_shepherds):
+        models[i] = PPO.load(args.model_path, env=env)
 
     # Initialize metrics
     metrics = {
@@ -53,22 +66,32 @@ if __name__ == "__main__":
     # Evaluate the model
     print(f"Starting evaluation of models")
     with torch.no_grad():
-        for sim in tqdm.tqdm(range(num_sims)):
+        for sim in tqdm.tqdm(range(args.num_sims)):
             observations = {}
-            for i in range(NUM_SHEEPDOGS):
+            for i in range(args.num_shepherds):
                 observations[i], info = env.reset(robot_id=i)
-            env.reset_frames()
             terminated = False
             truncated = False
             episode_reward = 0
             episode_length = 0
+
             while not terminated and not truncated:
-                for i in range(NUM_SHEEPDOGS):
+                for i in range(args.num_shepherds):
                     action, _ = models[i].predict(observations[i], deterministic=False)
                     observations[i], reward, terminated, truncated, _ = env.step(action, robot_id=i)
                 episode_reward += reward
                 episode_length += 1
-                env.render(mode='human', fps=100)
+
+                if args.render_mode == "human":
+                    env.render(mode="human", fps=60)
+                elif args.render_mode == "offscreen":
+                    env.render()
+
+            # Save video if specified
+            if save_video:
+                print(f"Saving video for simulation {sim}")
+                env.save_video(f"videos/simulation_{sim}.mp4", fps=60)
+            env.reset_frames()
 
             # Record metrics
             metrics['episode_rewards'].append(episode_reward)
@@ -82,14 +105,13 @@ if __name__ == "__main__":
         env.close()
 
     # Calculate success rate
-    metrics['success_rate'] = metrics['successful_episodes'] / num_sims
+    metrics['success_rate'] = metrics['successful_episodes'] / args.num_sims
 
     # Display metrics
     print(f"Model evaluation complete")
     print(f"Average episode reward: {np.mean(metrics['episode_rewards'])}")
     print(f"Average episode length: {np.mean(metrics['episode_lengths'])}")
     print(f"Average episode time: {np.mean(metrics['episode_lengths']) * 0.1} seconds")
-    # print(f"Episode Lengths: {metrics['episode_lengths']}")
     print(f"Success rate: {metrics['success_rate']}")
     print(f"Number of successful episodes: {metrics['successful_episodes']}")
     print(f"Number of unsuccessful episodes: {metrics['unsuccessful_episodes']}")
