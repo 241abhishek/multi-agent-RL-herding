@@ -6,25 +6,6 @@ import pygame
 from enum import Enum
 import imageio as iio
 
-class TrainState(Enum):
-    """
-    Track the training state of the environment.
-
-    The environment reset method can be called in different states to reset the environment to a specific configuration. 
-
-    The following states are defined to control the spawn location of the robots in the environment:
-    - RANDOM: Random spawn locations for all robots
-    - CLOSE: Sheep spawn close to the goal point
-    - MEDIUM: Sheep spawn at a medium distance from the goal point
-    - FAR: Sheep spawn far from the goal point
-    """
-
-    RANDOM = 0
-    CLOSE = 1
-    MEDIUM = 2
-    FAR = 3
-    
-
 class HerdingSimEnv(gym.Env):
     def __init__(self, arena_length, arena_width, num_sheep, num_sheepdogs, 
                  robot_distance_between_wheels, robot_wheel_radius, max_wheel_velocity, 
@@ -333,14 +314,14 @@ class HerdingSimEnv(gym.Env):
             if self.action_count == self.num_sheepdogs - 1:
                 self.compute_sheep_actions()
                 # compute reward, terminated, and info
-                self.reward, self.terminated, self.truncated = self.compute_reward_v6()
+                self.reward, self.terminated, self.truncated = self.compute_reward()
                 self.action_count = 0
             else:
                 self.action_count += 1
         else:
             self.compute_sheep_actions()
             # Compute reward, terminated, and info
-            self.reward, self.terminated, self.truncated = self.compute_reward_v6()
+            self.reward, self.terminated, self.truncated = self.compute_reward()
             info = {}
 
         return observations, self.reward, self.terminated, self.truncated, info
@@ -688,7 +669,7 @@ class HerdingSimEnv(gym.Env):
         # Return positions and orientations of the sheep and the sheep-dog with robot_id and the goal point
         obs = []
         obs.append(self.robots[robot_id].get_state()) # add the appropriate sheep-dog state 
-        obs.append(self.get_obs_for_sheep_v2(robot_id)) # add the appropriate sheep state
+        obs.append(self.get_obs_for_sheep(robot_id)) # add the appropriate sheep state
         # append the goal point to the observations
         goal = np.array(self.goal_point + [0.0]) # add a dummy orientation
 
@@ -699,32 +680,8 @@ class HerdingSimEnv(gym.Env):
         obs.append(goal)
 
         return np.array(obs)
-    
+
     def get_obs_for_sheep(self, robot_id):
-        """
-        This function is used to define the logic for which sheep the sheep-dog with robot_id should observe.
-
-        The sheep-dog with robot_id will observe the sheep that is the robot_id sheep away from the goal.
-        Ex: sheep-dog with id 0 will observe the sheep farghest from the goal point, sheep-dog with id 1
-        will observe the second farthest sheep from the goal point and so on. 
-
-        Args:
-            robot_id (int): ID of the sheep-dog to determine the sheep to observe.
-
-        Returns:
-            np.ndarray: Observation of the sheep that the sheep-dog with robot_id should observe.
-        """
-
-        # get the index of the sheep to observe
-        sheep_id = self.farthest_sheep[robot_id]
-        # add sheep_id to the targeted list
-        if self.targeted is not None:
-            self.targeted.append(sheep_id)
-        else:
-            self.targeted = [sheep_id]
-        return self.robots[sheep_id].get_state()
-
-    def get_obs_for_sheep_v2(self, robot_id):
         """
         This function is used to define the logic for which sheep the sheep-dog with robot_id should observe.
 
@@ -750,7 +707,6 @@ class HerdingSimEnv(gym.Env):
                 min_dist_id = i
 
         sheep_id = self.farthest_sheep.pop(min_dist_id)
-        # sheep_id = self.farthest_sheep[min_dist_id]
 
         # add sheep_id to the targeted list
         if self.targeted is not None:
@@ -767,8 +723,6 @@ class HerdingSimEnv(gym.Env):
             # Normalize the position to between -1 and 1
             observation[i][0] = 2 * (observation[i][0] / self.arena_length) - 1
             observation[i][1] = 2 * (observation[i][1] / self.arena_width) - 1
-            # observation[i][0] = observation[i][0] / self.arena_length
-            # observation[i][1] = observation[i][1] / self.arena_width
             # Normalize the orientation (between -pi and pi to between -1 and 1)
             observation[i][2] = observation[i][2] / np.pi
             
@@ -788,264 +742,7 @@ class HerdingSimEnv(gym.Env):
 
         return np.array(obs, dtype=np.float32)
 
-    def compute_reward_v1(self):
-        """
-        Compute the reward for the current state of the environment.
-
-        Reward is calculated on the following basis:
-        - Reward based on the distance of the sheep from the goal point
-        - Negative reward for each time step to encourage faster convergence
-        - Negative reward for allowing the sheep to spread to far from each other (not clustered)
-        - Positive reward for the sheep-dogs being on the other side of the sheep herd and the goal point
-        - Large positive reward for the sheep herd reaching the goal point
-
-        Returns:
-            float: Reward value
-        """
-
-        reward = 0.0
-
-        # calculate the distance of each sheep from the goal point
-        for i in range(self.num_sheepdogs, len(self.robots)):
-            x, y, _ = self.robots[i].get_state()
-            dist = np.linalg.norm(np.array([x, y]) - np.array(self.goal_point))
-            reward += -dist
-
-        # add negative reward for each time step
-        reward += -1.0
-
-        # calculate the Global Center of Mass (GCM) of the sheep herd
-        sheep_gcm = np.array([0.0, 0.0])
-        for i in range(self.num_sheepdogs, len(self.robots)):
-            x, y, _ = self.robots[i].get_state()
-            sheep_gcm = np.add(sheep_gcm, np.array([x, y]))
-        sheep_gcm = sheep_gcm / self.num_sheep
-
-        # calculate the distance of each sheep from the GCM
-        for i in range(self.num_sheepdogs, len(self.robots)):
-            x, y, _ = self.robots[i].get_state()
-            dist = np.linalg.norm(np.array([x, y]) - sheep_gcm)
-            reward += -dist + 1.5 # 1.5 is added as a buffer to specify the min distance at which no penalty in incurred 
-
-        # determine if the sheep-dogs are on the other side of the sheep herd and the goal point
-        sheepdog_gcm = np.array([0.0, 0.0])
-        for i in range(self.num_sheepdogs):
-            x, y, _ = self.robots[i].get_state()
-            sheepdog_gcm = np.add(sheepdog_gcm, np.array([x, y]))
-        sheepdog_gcm = sheepdog_gcm / self.num_sheepdogs
-
-        # calculate the equation of the line perpendicular to the line connecting the sheep GCM and the goal point and passing through the sheep GCM
-        m = (sheep_gcm[1] - self.goal_point[1]) / (sheep_gcm[0] - self.goal_point[0])
-        m_perp = -1.0 / m
-        c = sheep_gcm[1] - m_perp * sheep_gcm[0]
-
-        # determine the side of the sheep-dogs with respect to the line
-        sheep_dog_side = np.sign(sheepdog_gcm[1] - m_perp * sheepdog_gcm[0] - c)
-
-        # determine the side of the goal point with respect to the line
-        goal_side = np.sign(self.goal_point[1] - m_perp * self.goal_point[0] - c)
-
-        # check if the sheep-dogs are on the other side of the sheep herd and the goal point
-        if sheep_dog_side != goal_side:
-            reward += 25.0
-
-        # check if the sheep herd has reached the goal point
-        terminated = self.check_terminated()
-        if terminated:
-            reward += 2500.0
-
-        return reward, terminated
-    
-    def compute_reward_v2(self):
-        """
-        Compute the reward for the current state of the environment.
-
-        Reward is calculated on the following basis:
-        - Reward based on the distance of the sheep from the goal point
-        - Negative reward for each time step to encourage faster convergence
-        - Large positive reward for the sheep herd reaching the goal point
-
-        Returns:
-            float: Reward value
-        """
-
-        reward = 0.0
-
-        # calculate the distance of each sheep from the goal point
-        for i in range(self.num_sheepdogs, len(self.robots)):
-            x, y, _ = self.robots[i].get_state()
-            dist = np.linalg.norm(np.array([x, y]) - np.array(self.goal_point))
-            reward += -dist
-
-        # add negative reward for each time step
-        reward += -25.0
-
-        # check if the sheep herd has reached the goal point
-        terminated = self.check_terminated()
-        if terminated:
-            reward += 2500.0
-
-        return reward, terminated
-
-    def compute_reward_v3(self):
-        """
-        Compute the reward for the current state of the environment.
-
-        Reward is calculated on the following basis:
-        - Reward based on the distance of the sheep from the goal point
-        - Large positive reward for the sheep herd reaching the goal point
-        - Negative reward for the sheep dog staying in the same position in two consecutive time steps
-        - Positive reward for the sheep dog moving
-
-        Returns:
-            float: Reward value
-        """
-
-        reward = 0.0
-
-        # calculate the distance of each sheep from the goal point
-        for i in range(self.num_sheepdogs, len(self.robots)):
-            x, y, _ = self.robots[i].get_state()
-            dist = np.linalg.norm(np.array([x, y]) - np.array(self.goal_point))
-            reward += -dist
-
-        # check if the sheep herd has reached the goal point
-        terminated = self.check_terminated()
-        if terminated:
-            reward += 2500.0
-
-        # check if the sheep dogs have stayed in the same position in two consecutive time steps
-        tolerance = 0.025
-        if self.prev_sheepdog_position is not None:
-            same_position = True
-            for i in range(self.num_sheepdogs):
-                x, y, _ = self.robots[i].get_state()
-                prev_x, prev_y, _ = self.prev_sheepdog_position[i]
-                dist = np.linalg.norm(np.array([x, y]) - np.array([prev_x, prev_y]))
-                if dist > tolerance:
-                    same_position = False
-                    break
-            if same_position:
-                reward += -50.0
-            else:
-                reward += 50.0
-
-        # save the current position for the next time step
-        self.prev_sheepdog_position = []
-        for i in range(self.num_sheepdogs):
-            x, y, theta = self.robots[i].get_state()
-            self.prev_sheepdog_position.append([x, y, theta])
-
-        return reward, terminated
-
-    def compute_reward_v4(self):
-        """
-        Compute the reward for the current state of the environment.
-
-        Reward is calculated on the following basis:
-        - Large positive reward for the sheep herd reaching the goal point
-        - Negative reward for the sheep dog staying in the same position in two consecutive time steps
-        - Positive reward for the sheep dog moving
-        - Positive reward for moving the sheep closer to the goal point
-
-        Returns:
-            float: Reward value
-        """
-
-        reward = 0.0
-
-        # check if the sheep herd has reached the goal point
-        terminated = self.check_terminated()
-        if terminated:
-            reward += 2500.0
-            return reward, terminated
-
-        # check if the sheep dogs have stayed in the same position in two consecutive time steps
-        tolerance = 0.025
-        if self.prev_sheepdog_position is not None:
-            same_position = True
-            for i in range(self.num_sheepdogs):
-                x, y, _ = self.robots[i].get_state()
-                prev_x, prev_y, _ = self.prev_sheepdog_position[i]
-                dist = np.linalg.norm(np.array([x, y]) - np.array([prev_x, prev_y]))
-                if dist > tolerance:
-                    same_position = False
-                    break
-            if not same_position:
-                reward += 50.0
-
-        # save the current sheepdog position for the next time step
-        self.prev_sheepdog_position = []
-        for i in range(self.num_sheepdogs):
-            x, y, theta = self.robots[i].get_state()
-            self.prev_sheepdog_position.append([x, y, theta])
-
-        # check if any of the sheep have moved closer to the goal point
-        if self.prev_sheep_position is not None:
-            for i in range(self.num_sheepdogs, len(self.robots)):
-                x, y, _ = self.robots[i].get_state()
-                prev_x, prev_y, _ = self.prev_sheep_position[i - self.num_sheepdogs]
-                dist = np.linalg.norm(np.array([x, y]) - np.array(self.goal_point))
-                prev_dist = np.linalg.norm(np.array([prev_x, prev_y]) - np.array(self.goal_point))
-                if dist < prev_dist:
-                    reward += 25.0
-
-        # save the current sheep position for the next time step
-        self.prev_sheep_position = []
-        for i in range(self.num_sheepdogs, len(self.robots)):
-            x, y, theta = self.robots[i].get_state()
-            self.prev_sheep_position.append([x, y, theta])
-
-        return reward, terminated
-
-    def compute_reward_v5(self):
-        """
-        Compute the reward for the current state of the environment.
-
-        Reward is calculated on the following basis:
-        - Large positive reward for the sheep herd reaching the goal point
-        - Positive reward for moving the sheep closer to the goal point for sheep outside the goal zone
-
-        Returns:
-            float: Reward value
-        """
-
-        reward = 0.0
-
-        # check if the sheep herd has reached the goal point
-        terminated = self.check_terminated()
-        truncated = self.check_truncated()
-        if terminated:
-            reward += 10000.0
-            return reward, terminated, truncated
-
-        if truncated:
-            reward += -1.0
-            return reward, terminated, truncated
-
-        # add negative reward for each time step
-        reward += -1.0
-
-        # check if any of the sheep have moved closer to the goal point
-        if self.prev_sheep_position is not None:
-            for i in range(self.num_sheepdogs, len(self.robots)):
-                x, y, _ = self.robots[i].get_state()
-                prev_x, prev_y, _ = self.prev_sheep_position[i - self.num_sheepdogs]
-                dist = np.linalg.norm(np.array([x, y]) - np.array(self.goal_point))
-                prev_dist = np.linalg.norm(np.array([prev_x, prev_y]) - np.array(self.goal_point))
-                # check if dist is less than the previous distance and that the sheep is outside the goal tolerance zone
-                if dist < prev_dist and dist > self.goal_tolreance:
-                    reward += 100.0
-
-        # save the current sheep position for the next time step
-        self.prev_sheep_position = []
-        for i in range(self.num_sheepdogs, len(self.robots)):
-            x, y, theta = self.robots[i].get_state()
-            self.prev_sheep_position.append([x, y, theta])
-
-        return reward, terminated, truncated
-
-    def compute_reward_v6(self):
+    def compute_reward(self):
         """
         Compute the reward based on score improvements from the minimum achieved score.
         Score is calculated based on sheep distance from goal, with:
@@ -1095,58 +792,6 @@ class HerdingSimEnv(gym.Env):
             reward -= 25.0
 
         return reward, terminated, truncated
-
-    def compute_reward_v7(self):
-        """
-        Compute the reward based on the spread of the sheep from the gcm of the sheep herd.
-        """
-
-        reward = 0.0
-
-        truncated = self.check_truncated()
-
-        # apply time penalty if truncated
-        if truncated:
-            reward += -5.0
-            return reward, False, truncated
-
-        # add a negative reward for each time step
-        reward += -5.0
-
-        # calculate the Global Center of Mass (GCM) of the sheep herd
-        sheep_gcm = np.array([0.0, 0.0])
-        for i in range(self.num_sheepdogs, len(self.robots)):
-            x, y, _ = self.robots[i].get_state()
-            sheep_gcm = np.add(sheep_gcm, np.array([x, y]))
-        sheep_gcm = sheep_gcm / self.num_sheep
-        self.gcm = [sheep_gcm[0], sheep_gcm[1]]
-
-        # calculate score based on the spread of the sheep from the GCM
-        score = 0.0
-        num_sheep_within_tol = 0
-        for i in range(self.num_sheepdogs, len(self.robots)):
-            x, y, _ = self.robots[i].get_state()
-            dist = np.linalg.norm(np.array([x, y]) - sheep_gcm)
-            if dist <= self.goal_tolreance:
-                num_sheep_within_tol += 1
-                reward += 500.0
-            score += dist
-
-        # update the minimum score achieved
-        if score < self.min_score:
-            reward += 50.0
-            self.min_score = score
-        else:
-            reward -= 25.0
-
-        if num_sheep_within_tol == self.num_sheep:
-            reward += 50000.0
-            terminated = True
-        else:
-            terminated = False
-
-        return reward, terminated, truncated
-
 
     def check_terminated(self):
         # check if the sheep herd has reached the goal point
