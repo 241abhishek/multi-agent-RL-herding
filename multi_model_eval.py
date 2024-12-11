@@ -38,6 +38,12 @@ if __name__ == "__main__":
     # Convert save_video to boolean
     save_video = args.save_video.lower() == "true" 
 
+    # create a video directory if it does not exist
+    if save_video:
+        import os
+        if not os.path.exists("videos"):
+            os.makedirs("videos")
+
     # Environment parameters
     arena_length = 15
     arena_width = 15
@@ -52,7 +58,7 @@ if __name__ == "__main__":
     # Load model
     models = {}
     for i in range(args.num_shepherds):
-        models[i] = PPO.load(args.model_path, env=env)
+        models[i] = PPO.load(args.model_path, env=env, device='cpu')
 
     # Initialize metrics
     metrics = {
