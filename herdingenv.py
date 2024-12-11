@@ -4,6 +4,7 @@ import numpy as np
 from herdingrobot import DifferentialDriveRobot
 import pygame
 from enum import Enum
+import imageio as iio
 
 class TrainState(Enum):
     """
@@ -94,7 +95,7 @@ class HerdingSimEnv(gym.Env):
                                             # shape=(num_sheep + num_sheepdogs + 1, 3), dtype=np.float32)
 
         # Convert to pygame units (pixels)
-        self.scale_factor = 50  # 1 meter = 50 pixels, adjust as needed
+        self.scale_factor = 51.2  # 1 meter = 51.2 pixels, adjust as needed (result must be divisible by 16 to maintain compatibility with video codecs)
         self.arena_length_px = self.arena_length * self.scale_factor
         self.arena_width_px = self.arena_width * self.scale_factor
 
@@ -145,8 +146,8 @@ class HerdingSimEnv(gym.Env):
         if self.goal_point is None:
             # self.goal_point = [self.arena_length / 2, self.arena_width / 2]
             # generate random goal point for the sheep herd
-            goal_x = np.random.uniform(0 + self.arena_threshold, self.arena_length - self.arena_threshold)
-            goal_y = np.random.uniform(0 + self.arena_threshold, self.arena_width - self.arena_threshold)
+            goal_x = np.random.uniform(0 + self.arena_threshold + self.goal_tolreance, self.arena_length - self.arena_threshold - self.goal_tolreance)
+            goal_y = np.random.uniform(0 + self.arena_threshold + self.goal_tolreance, self.arena_width - self.arena_threshold - self.goal_tolreance)
             self.goal_point = [goal_x, goal_y]
         else:
             assert len(self.goal_point) == 2, "Invalid goal point! Please provide a valid goal point."
@@ -367,7 +368,7 @@ class HerdingSimEnv(gym.Env):
         # Draw the goal point with a red circel indicating the tolerance zone
         goal_x_px = int(self.goal_point[0] * self.scale_factor)
         goal_y_px = self.arena_width_px - int(self.goal_point[1] * self.scale_factor) # Flip y-axis
-        pygame.draw.circle(self.screen, (255, 0, 0), (goal_x_px, goal_y_px), int(self.goal_tolreance * self.scale_factor), 1)
+        pygame.draw.circle(self.screen, (255, 0, 0), (goal_x_px, goal_y_px), int((self.goal_tolreance + 0.3) * self.scale_factor), 1)
 
         # Plot robots
         for i, robot in enumerate(self.robots):
@@ -445,8 +446,8 @@ class HerdingSimEnv(gym.Env):
         if self.action_mode != "multi":
             # Generate random goal point for the sheep herd
             if self.goal is False:
-                goal_x = np.random.uniform(0 + self.arena_threshold, self.arena_length - self.arena_threshold)
-                goal_y = np.random.uniform(0 + self.arena_threshold, self.arena_width - self.arena_threshold)
+                goal_x = np.random.uniform(0 + self.arena_threshold + self.goal_tolreance, self.arena_length - self.arena_threshold - self.goal_tolreance)
+                goal_y = np.random.uniform(0 + self.arena_threshold + self.goal_tolreance, self.arena_width - self.arena_threshold - self.goal_tolreance)
                 self.goal_point = [goal_x, goal_y]
 
             # generate random initial positions within the arena if not provided
@@ -478,8 +479,8 @@ class HerdingSimEnv(gym.Env):
             if robot_id == 0: # only reset the environment for the first sheep-dog, for the rest of the sheep-dogs, return the observation
                 # Generate random goal point for the sheep herd
                 if self.goal is False:
-                    goal_x = np.random.uniform(0 + self.arena_threshold, self.arena_length - self.arena_threshold)
-                    goal_y = np.random.uniform(0 + self.arena_threshold, self.arena_width - self.arena_threshold)
+                    goal_x = np.random.uniform(0 + self.arena_threshold + self.goal_tolreance, self.arena_length - self.arena_threshold - self.goal_tolreance)
+                    goal_y = np.random.uniform(0 + self.arena_threshold + self.goal_tolreance, self.arena_width - self.arena_threshold - self.goal_tolreance)
                     self.goal_point = [goal_x, goal_y]
 
                 # generate random initial positions within the arena if not provided
@@ -527,6 +528,13 @@ class HerdingSimEnv(gym.Env):
         # add a time dimension to the video
         frames = np.expand_dims(frames, axis=0)
         return frames
+
+    def save_video(self, filepath, fps):
+        # convert self.frames from (num_frames, 3, height, width) to shape (num_frames, height, width, 3)
+        frames = np.array(self.frames)
+        frames = np.moveaxis(frames, 1, -1)
+        # save the video using imageio
+        iio.mimwrite(filepath, frames, fps=fps)
 
     def reset_frames(self):
         self.frames = []

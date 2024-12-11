@@ -7,7 +7,7 @@ class DifferentialDriveRobot:
         self.wheel_radius = wheel_radius
         self.prev_velocity = np.array([0.0, 0.0])
         self.max_acceleration = float("inf") # m/s^2
-        self.omega_acceleration = 10.0 # rad/s^2
+        self.omega_acceleration = 7.5 # rad/s^2
 
     def update_position(self, left_wheel_velocity, right_wheel_velocity, dt=0.1):
         # Differential drive kinematics
