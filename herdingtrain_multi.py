@@ -1,5 +1,5 @@
-from stable_baselines3 import PPO
-from stable_baselines3.common.vec_env import DummyVecEnv, VecMonitor
+from stable_baselines3 import PPO, SAC
+from stable_baselines3.common.vec_env import DummyVecEnv, VecMonitor, SubprocVecEnv, VecNormalize
 import os
 from herdingenv import HerdingSimEnv
 import time
@@ -19,13 +19,8 @@ def make_env():
         robot_distance_between_wheels = 0.2  # meters
         max_wheel_velocity = 8.0  # m/s
 
-        robots = [
-            [2.0, 2.0, np.pi/4],  # sheep-dog 1
-            [5.0, 5.0, np.pi/4],  # sheep 1
-        ]
-
         # Create the environment
-        env = HerdingSimEnv(arena_length, arena_width, num_sheep, num_sheepdogs, robot_distance_between_wheels, robot_wheel_radius, max_wheel_velocity, robots)
+        env = HerdingSimEnv(arena_length, arena_width, num_sheep, num_sheepdogs, robot_distance_between_wheels, robot_wheel_radius, max_wheel_velocity, action_mode="point", attraction_factor=0.0)
 
         # print(f"Environment initialized in process ID: {os.getpid()}")
 
@@ -37,9 +32,6 @@ if __name__ == "__main__":
     name = "herding_multi_PPO"
     time_now = time.strftime("%Y%m%d-%H%M%S")
     run = wandb.init(project='multi_herding_rl', name=f"{name}-{time_now}" , sync_tensorboard=True, save_code=True)
-    # define custom metrics for logging
-    # wandb.define_metric("custom_step")
-    # wandb.define_metric("video", step_metric="custom_step")
 
     # Create directories for saving models and logs
     models_dir = f"models/herding_test/{name}-{time_now}"
@@ -50,12 +42,13 @@ if __name__ == "__main__":
         os.makedirs(logdir)
 
     num_envs = 20 # number of parallel environments
-    env = DummyVecEnv([make_env() for _ in range(num_envs)])
+    env = SubprocVecEnv([make_env() for _ in range(num_envs)])
     env = VecMonitor(env)  # VecMonitor wraps the entire VecEnv for logging
+    env = VecNormalize(env, norm_reward=True) # VecNormalize normalizes the rewards
 
     # Initialize the model
     model = PPO('MlpPolicy', env, verbose=1, device="cpu", n_steps=6144, tensorboard_log=logdir)
-    TIMESTEPS = 1e6 # number of timesteps to train the model for before logging
+    TIMESTEPS = 250000 # number of timesteps to train the model for before logging
     # calculate iterations based on num_timesteps
     iters = model.num_timesteps // TIMESTEPS
     print(f"Starting from iteration {iters}")
