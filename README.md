@@ -1,4 +1,4 @@
-# Multi-Agent Sheep Herding Simulation
+# Multi-Agent Reinforcement Learning for Shepherding 
 
 ## Overview
 This project implements a multi-agent reinforcement learning (RL) approach to the shepherding task using Stable Baselines3 (SB3) and a custom herding environment. The simulation allows multiple shepherds to collaborate in guiding sheep to the goal region. 
@@ -52,3 +52,10 @@ python3 herdingtrain_multi.py
 ```
 
 Look at [`herdingtrain_multi.py`](herdingtrain_multi.py) to understand and modify training configurations. The script uses Vectorized Environments to run mutiple instances of the agent simultaneosly. This increases the data collection rate speeding up the training process. 
+
+### Control Modes for the Shepherd in the Simulation
+The simulation provides four distinct control modes for shepherds:
+- Wheel Mode: Directly control the left and right wheel velocities, offering granular control over the robot’s movement.
+- Vector Mode: Specify a heading vector and speed for shepherds, simplifying control while still adhering to the physics of differential drive systems.
+- Point Mode: Specify a destination point on the map, and the simulation calculates appropriate wheel velocities to navigate the shepherd toward the target, abstracting low-level control.
+- Multi Mode: This mode is used when evaluating a model trained for a single shepherd-single sheep on multiple agents using the attention swithing mehanism. See [website post](https://abhishek-sankar.com/multi-agent-rl/) for more info.
