@@ -3,7 +3,6 @@ from gymnasium import spaces
 import numpy as np
 from herdingrobot import DifferentialDriveRobot
 import pygame
-from enum import Enum
 import imageio as iio
 
 class HerdingSimEnv(gym.Env):
